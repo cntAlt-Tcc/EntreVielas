@@ -144,7 +144,25 @@ end
 -- [[ FIM DO SCRIPT DE SEGURANÇA ]]
 
 local FiveSync = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
-FiveSync:OptimizeMode(true)
+-- Otimização automática para mobile (detecta e liga o modo otimizado)
+if FiveSync:IsMobile() then
+    FiveSync:OptimizeMode(true, {
+        DisableBlur = true,
+        DisableHover = true,
+        DisableAnimations = true,
+        DisableDragBlacklistListener = true,
+        MainLoopDelay = 0.1,
+        KeybindsDelay = 0.1,
+        KeybindHandlerDelay = 0.05,
+        BlurDelay = 0.5,
+        ColorPickerDelay = 0.03,
+        CloseButtonDelay = 0.5,
+        ConfigRefreshDelay = 0.5,
+    })
+    print("[E$34x] Mobile detectado - modo otimizado ativado.")
+else
+    print("[E$34x] Desktop detectado - modo normal.")
+end
 FiveSync.Colors.Highlight = Color3.fromRGB(255, 0, 0)
 FiveSync.Colors.Toggle = Color3.fromRGB(220, 0, 20)
 local Notifier = FiveSync.newNotify()
@@ -160,54 +178,39 @@ local Window = FiveSync.new({
     Scale = UDim2.fromScale(0.5, 0.9),  -- 40% da largura, 70% da altura da tela
     TextSize = 15,
 })
--- ==============================================================
--- EXIBIR TEMPO RESTANTE DA KEY NO RODAPÉ (sem sobrecarregar a API)
--- ==============================================================
-if _G.LoaderExpireAt then
-    local function updateExpireText()
-        local now = os.time()
-        local remaining = _G.LoaderExpireAt - now
-        local expireText = ""
-
-        if remaining <= 0 then
-            expireText = "Expirada"
-        elseif remaining >= 86400 * 365 then  -- mais de 1 ano
-            expireText = "Nunca expira"
-        else
-            local days = math.floor(remaining / 86400)
-            local hours = math.floor((remaining % 86400) / 3600)
-            if days > 0 then
-                expireText = string.format("%d dias", days)
-                if hours > 0 then
-                    expireText = expireText .. string.format(" e %dh", hours)
-                end
-            else
-                local minutes = math.floor((remaining % 3600) / 60)
-                if hours > 0 then
-                    expireText = string.format("%dh %dm", hours, minutes)
-                else
-                    expireText = string.format("%dm", minutes)
-                end
-            end
-        end
-
-        -- Atualiza o campo "ExpireDate" no rodapé da UI
-        Window:Update({ ExpireDate = expireText })
+-- Exibe o tempo restante da key no rodapé (sem sobrecarregar a API)
+local function formatRemaining(remaining)
+    if remaining <= 0 then
+        return "Expirada"
+    elseif remaining >= 86400 * 365 then
+        return "Nunca expira"
     end
 
-    updateExpireText()  -- atualiza imediatamente
+    local days = math.floor(remaining / 86400)
+    local hours = math.floor((remaining % 86400) / 3600)
+    local minutes = math.floor((remaining % 3600) / 60)
 
-    -- Atualiza localmente a cada 5 minutos (sem chamar a API)
-    task.spawn(function()
-        while true do
-            task.wait(300) -- 5 minutos
-            updateExpireText()
-        end
-    end)
-else
-    -- Caso não tenha informação de expiração (key permanente ou erro)
-    Window:Update({ ExpireDate = "Nunca expira" })
+    if days > 0 then
+        return hours > 0 and string.format("%d dias e %dh", days, hours) or string.format("%d dias", days)
+    elseif hours > 0 then
+        return string.format("%dh %dm", hours, minutes)
+    end
+
+    return string.format("%dm", minutes)
 end
+
+local function updateExpireText()
+    local remaining = (_G.LoaderExpireAt or 0) - os.time()
+    Window:Update({ ExpireDate = formatRemaining(remaining) })
+end
+
+updateExpireText()
+task.spawn(function()
+    while true do
+        task.wait(300)
+        updateExpireText()
+    end
+end)
 Window:DrawCategory({ Name = "E$34x Menu V1" })
 local WlcT = Window:DrawTab({
     Name = "| Bem-Vindo",
@@ -244,7 +247,7 @@ WlcS:AddParagraph({
     Content = [[
 - Sobre nosso script e comunidade:
 
-E$34x foi iniciada pelo dev principal apos a queda do seu antigo script 
+E$34x foi iniciado pela Team EntreViela$ apos a queda do antigo script 
 o Famoso 1v99 que ficou muito conhecido no cenario do Sintonia RP e Role play Brasil.
 Apos a queda Desânimo bateu parei por um bom tempo e voltei com essa comunidade.
 estamos aceitando novos scripters e ajudando iniciantes sem cobrar nada.
@@ -256,20 +259,11 @@ estamos aceitando novos scripters e ajudando iniciantes sem cobrar nada.
 WlcS:AddParagraph({
     Title = "Criadores",
     Content = [[
-- Lista Dos Criadores e Ajudantes
+- Creditos a Team EntreViela$
 
-Devs: Raro , Menor Dk
+Desenvolvido por: Team EntreViela$
 
-Parceiros:
- - Kai (gitmenu)
- - 4lpaca (Lib).
-
-Referencia:
-  None.
-
-Ajudantes/Tester:
- - Thz [Principal ajudande desdo inicio dos projetos]
- - Ghost [Scripter ajudou mt]
+Lib: FiveSync (EntreViela$ Team)
 ]]
 })
 WlcS:AddButton({
@@ -2547,8 +2541,177 @@ CameraSection:AddSlider({
         NotifyCam("Zoom: "..MaxZoom)
     end
 })
--- No FINAL do seu script, após todas as outras abas (Hitbox, Aimbot, ESP, etc.),
--- adicione a aba de Configs:
+
+-- ==============================================================
+-- Aba Misc: Settings (UI) e Temas (nomes/ícones/cores do exemplo)
+-- ==============================================================
+Window:DrawCategory({ Name = "Misc" })
+
+local SettingTab = Window:DrawTab({
+    Icon = "settings-3",
+    Name = "Settings",
+    Type = "Single",
+    EnableScrolling = true
+})
+
+local ThemeTab = Window:DrawTab({
+    Icon = "paintbrush",
+    Name = "Themes",
+    Type = "Single"
+})
+
+local Settings = SettingTab:DrawSection({
+    Name = "UI Settings",
+})
+
+Settings:AddToggle({
+    Name = "Alway Show Frame",
+    Default = false,
+    Callback = function(v)
+        Window.AlwayShowTab = v;
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Highlight",
+    Default = FiveSync.Colors.Highlight,
+    Callback = function(v)
+        FiveSync.Colors.Highlight = v;
+        FiveSync:RefreshCurrentColor();
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Toggle Color",
+    Default = FiveSync.Colors.Toggle,
+    Callback = function(v)
+        FiveSync.Colors.Toggle = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Drop Color",
+    Default = FiveSync.Colors.DropColor,
+    Callback = function(v)
+        FiveSync.Colors.DropColor = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Risky",
+    Default = FiveSync.Colors.Risky,
+    Callback = function(v)
+        FiveSync.Colors.Risky = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Mouse Enter",
+    Default = FiveSync.Colors.MouseEnter,
+    Callback = function(v)
+        FiveSync.Colors.MouseEnter = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Block Color",
+    Default = FiveSync.Colors.BlockColor,
+    Callback = function(v)
+        FiveSync.Colors.BlockColor = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Background Color",
+    Default = FiveSync.Colors.BGDBColor,
+    Callback = function(v)
+        FiveSync.Colors.BGDBColor = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Block Background Color",
+    Default = FiveSync.Colors.BlockBackground,
+    Callback = function(v)
+        FiveSync.Colors.BlockBackground = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Stroke Color",
+    Default = FiveSync.Colors.StrokeColor,
+    Callback = function(v)
+        FiveSync.Colors.StrokeColor = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "High Stroke Color",
+    Default = FiveSync.Colors.HighStrokeColor,
+    Callback = function(v)
+        FiveSync.Colors.HighStrokeColor = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Switch Color",
+    Default = FiveSync.Colors.SwitchColor,
+    Callback = function(v)
+        FiveSync.Colors.SwitchColor = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddColorPicker({
+    Name = "Line Color",
+    Default = FiveSync.Colors.LineColor,
+    Callback = function(v)
+        FiveSync.Colors.LineColor = v;
+        FiveSync:RefreshCurrentColor(v);
+    end,
+})
+
+Settings:AddButton({
+    Name = "Get Theme",
+    Callback = function()
+        print(FiveSync:GetTheme())
+
+        Notifier.new({
+            Title = "Notification",
+            Content = "Copied Them Color to your clipboard",
+            Duration = 5,
+            Icon = "rbxassetid://95629194286677"
+        });
+    end,
+})
+
+ThemeTab:DrawSection({
+    Name = "UI Themes"
+}):AddDropdown({
+    Name = "Select Theme",
+    Default = "Default",
+    Values = {
+        "Default",
+        "Dark Green",
+        "Dark Blue",
+        "Purple Rose",
+        "Skeet"
+    },
+    Callback = function(v)
+        FiveSync:SetTheme(v)
+    end,
+})
+
+-- Aba de Configs (salvar/carregar)
 local SaveTab = Window:DrawConfig({
     Name = "| Save",
     Icon = "folder",
