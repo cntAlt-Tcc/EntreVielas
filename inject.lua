@@ -7018,7 +7018,7 @@ function Compkiller.new(Config : Window)
 		local TabOpenSignal = Compkiller.__SIGNAL(false);
 
 		local TabArgs = {
-			__Current = nil,Compkiller.PerformanceMode
+			__Current = nil,
 			Tabs = {}
 		};
 
