@@ -8,7 +8,8 @@ export type Window = {
 	Keybind: string | Enum.KeyCode,
 	Logo: string,
 	Scale: UDim2,
-	TextSize: number
+	TextSize: number,
+	PerformanceMode: boolean
 };
 
 export type ConfigManager = {
@@ -353,6 +354,7 @@ local Compkiller = {
 	},
 	PerformanceMode = false,
 	WindowsNil = {},
+	WindowsArgs = {},
 	NilFolder = Instance.new('Folder'),
 	ArcylicParent = CurrentCamera,
 	ProtectGui = protect_gui or protectgui or (syn and syn.protect_gui) or function(s) return s; end,
@@ -1407,6 +1409,23 @@ Compkiller.FontAwesome = {
 
 function Compkiller:OptimizeMode(v)
 	Compkiller.PerformanceMode = v;
+
+	for _ , Window in next , Compkiller.WindowsArgs do
+		Window.PerformanceMode = v;
+	end;
+end;
+
+function Compkiller:IsMobile()
+	return Compkiller:_IsMobile();
+end;
+
+function Compkiller:AutoOptimize()
+	if Compkiller:_IsMobile() then
+		Compkiller:OptimizeMode(true);
+		return true;
+	end;
+
+	return false;
 end;
 
 function Compkiller:IsStudio()
@@ -1533,6 +1552,10 @@ function Compkiller:GetCalculatePosition(planePos: number, planeNormal: number, 
 end;
 
 function Compkiller:_Blur(element : Frame , WindowRemote) : RBXScriptSignal
+	if Compkiller.PerformanceMode then
+		return game.Changed:Connect(function() end);
+	end;
+
 	if Compkiller.SecureMode and not Compkiller.SecurityConfig.BlurEnabled then
 		return game.Changed:Connect(function() end);
 	end;
@@ -1760,6 +1783,10 @@ function Compkiller.__SIGNAL(default)
 end;
 
 function Compkiller:_Hover(Frame: Frame , OnHover: () -> any?, Release: () -> any?)
+	if Compkiller.PerformanceMode then
+		return;
+	end;
+
 	Frame.MouseEnter:Connect(OnHover);
 
 	Frame.MouseLeave:Connect(Release);
@@ -6303,8 +6330,13 @@ function Compkiller.new(Config : Window)
 		Keybind = "Insert",
 		Logo = Compkiller.Logo;
 		Scale = Compkiller.Scale.Window,
-		TextSize = 15
+		TextSize = 15,
+		PerformanceMode = Compkiller.PerformanceMode
 	});
+
+	if Config.PerformanceMode then
+		Compkiller.PerformanceMode = true;
+	end;
 
 	local TabHover = Compkiller.__SIGNAL(false);
 	local WindowOpen = Compkiller.__SIGNAL(true);
@@ -6315,7 +6347,7 @@ function Compkiller.new(Config : Window)
 		IsOpen = true,
 		AlwayShowTab = false,
 		THREADS = {},
-		PerformanceMode = false,
+		PerformanceMode = Config.PerformanceMode,
 		Notify = Compkiller.newNotify()
 	};
 
@@ -6362,6 +6394,7 @@ function Compkiller.new(Config : Window)
 	WindowArgs.Root = CompKiller;
 
 	table.insert(Compkiller.Windows , CompKiller);
+	table.insert(Compkiller.WindowsArgs , WindowArgs);
 
 	MainFrame.Active = true;
 	MainFrame.Name = Compkiller:_RandomString()
@@ -9921,7 +9954,7 @@ function Compkiller.new(Config : Window)
 			Property = "BackgroundColor3"
 		});
 
-		while true do task.wait(0.01);
+		while true do task.wait(WindowArgs.PerformanceMode and 0.05 or 0.01);
 			BlurElement.Size = UDim2.new(1, TabFrame.AbsoluteSize.X - 35, 1, 0);
 			MovementFrame.Size = UDim2.new(1, TabFrame.AbsoluteSize.X - 35, 1, 0);
 
