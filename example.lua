@@ -17,9 +17,23 @@ local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/cn
 
 
 -- Mobile Optimization --
--- Detecta mobile e liga o modo otimizado (desliga blur, hover e alivia os loops).
+-- Detecta mobile e liga o modo otimizado. Você pode ajustar o comportamento
+-- passando uma config (opcional); os valores abaixo já são os padrões.
 if Compkiller:IsMobile() then
-	Compkiller:OptimizeMode(true);
+	Compkiller:OptimizeMode(true , {
+		DisableBlur = true,               -- desliga o acrylic/blur (mais pesado)
+		DisableHover = true,              -- desliga efeitos de hover
+		DisableAnimations = true,         -- aplica as propriedades sem tween
+		DisableDragBlacklistListener = true, -- remove o listener global de input por elemento
+		MainLoopDelay = 0.1,              -- intervalo do loop principal (maior = mais leve)
+		KeybindsDelay = 0.1,
+		KeybindHandlerDelay = 0.05,
+		BlurDelay = 0.5,
+		ColorPickerDelay = 0.03,
+		CloseButtonDelay = 0.5,
+		ConfigRefreshDelay = 0.5,
+	});
+
 	print("[COMPKILLER] Mobile detectado - modo otimizado ativado.");
 else
 	print("[COMPKILLER] Desktop detectado - modo normal.");
