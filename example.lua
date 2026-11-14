@@ -7,10 +7,23 @@
 	Author: 4lpaca
 
 	Press Left Alt to open / close
+
+	Otimização mobile: se o dispositivo for touch, a lib liga o modo de
+	performance automaticamente. Caso contrário, segue normal.
 ]]
 
 
 local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
+
+
+-- Mobile Optimization --
+-- Detecta mobile e liga o modo otimizado (desliga blur, hover e alivia os loops).
+if Compkiller:IsMobile() then
+	Compkiller:OptimizeMode(true);
+	print("[COMPKILLER] Mobile detectado - modo otimizado ativado.");
+else
+	print("[COMPKILLER] Desktop detectado - modo normal.");
+end;
 
 
 -- Create Notification --
