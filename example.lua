@@ -10,7 +10,7 @@
 ]]
 
 
-local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/RaroCabuloso/34hz/refs/heads/main/libs/Arcane/inject.lua"))();
+local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
 
 
 -- Create Notification --
