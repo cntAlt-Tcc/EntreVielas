@@ -7,10 +7,50 @@
 	Author: 4lpaca
 
 	Press Left Alt to open / close
+
+	Loader com correção automática de sintaxe da lib.
 ]]
 
 
-local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/RaroCabuloso/34hz/refs/heads/main/libs/Arcane/inject.lua"))();
+local URL = "https://raw.githubusercontent.com/RaroCabuloso/34hz/refs/heads/main/libs/Arcane/inject.lua"
+
+
+-- Corrige o erro de sintaxe da lib: "Compkiller.PerformanceMode" solto na tabela TabArgs
+local Source = game:HttpGet(URL)
+
+
+local Fixed, Count = Source:gsub(
+	"__Current%s*=%s*nil%s*,%s*Compkiller%.PerformanceMode",
+	"__Current = nil,",
+	1
+)
+
+
+if Count == 0 then
+	error("[COMPKILLER] Erro: trecho para correção não encontrado.")
+end
+
+
+local Chunk, CompileError = loadstring(Fixed)
+
+
+if not Chunk then
+	error("[COMPKILLER] Compilação: " .. tostring(CompileError))
+end
+
+
+local Success, Compkiller = pcall(Chunk)
+
+
+if not Success then
+	error("[COMPKILLER] Execução: " .. tostring(Compkiller))
+end
+
+
+assert(type(Compkiller) == "table", "Compkiller inválido")
+
+
+print("[COMPKILLER] Biblioteca carregada!");
 
 
 -- Create Notification --
