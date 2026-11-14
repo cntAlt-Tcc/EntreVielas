@@ -123,13 +123,13 @@ local function check_and_log()
     if success then
         local resData = HttpService:JSONDecode(response.Body)
         if resData.status == "banido" then
-            LocalPlayer:Kick("\n[Arcane Security]\n\nVocê está banido deste script.\nMotivo: " .. (resData.motivo or "Não especificado"))
+            LocalPlayer:Kick("\n[E$34x Security]\n\nVocê está banido deste script.\nMotivo: " .. (resData.motivo or "Não especificado"))
             return false
         end
-        print("[Arcane] Log registrado com sucesso!")
+        print("[E$34x] Log registrado com sucesso!")
         return true
     else
-        warn("[Arcane] Erro ao conectar com a API: " .. tostring(response))
+        warn("[E$34x] Erro ao conectar com a API: " .. tostring(response))
         -- Opcional: Impedir execução se a API estiver offline
         -- LocalPlayer:Kick("Erro de conexão com o servidor de segurança.")
         return true
@@ -143,45 +143,18 @@ end
 
 -- [[ FIM DO SCRIPT DE SEGURANÇA ]]
 
-local Arcane = loadstring(game:HttpGet("https://raw.githubusercontent.com/4lpaca-pin/CompKiller/refs/heads/main/src/source.luau"))();
-pcall(function()
-    Arcane:OptimizeMode(true)
-
-    Arcane.PerformanceMode = true
-    Arcane.CustomHighlightMode = false
-
-    Arcane._Blur = function(self, element, WindowRemote)
-        return {
-            Disconnect = function() end
-        }
-    end
-
-    Arcane._Animation = function(self, obj, _, props)
-        if typeof(obj) ~= "Instance" or type(props) ~= "table" then
-            return nil
-        end
-
-        for k, v in next, props do
-            pcall(function()
-                obj[k] = v
-            end)
-        end
-
-        return nil
-    end
-
-    Arcane.PreloadIcons = function() end
-end)
-Arcane.Colors.Highlight = Color3.fromRGB(255, 0, 0)
-Arcane.Colors.Toggle = Color3.fromRGB(220, 0, 20)
-local Notifier = Arcane.newNotify()
-local ConfigManager = Arcane:ConfigManager({
-    Directory = "Arcane",
-    Config = "Arcane-Configs"
+local FiveSync = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
+FiveSync:OptimizeMode(true)
+FiveSync.Colors.Highlight = Color3.fromRGB(255, 0, 0)
+FiveSync.Colors.Toggle = Color3.fromRGB(220, 0, 20)
+local Notifier = FiveSync.newNotify()
+local ConfigManager = FiveSync:ConfigManager({
+    Directory = "E$34x",
+    Config = "E$34x-Configs"
 })
-Arcane:Loader("rbxassetid://95629194286677", 2.5).yield()
-local Window = Arcane.new({
-    Name = "Arcane",
+FiveSync:Loader("rbxassetid://95629194286677", 2.5).yield()
+local Window = FiveSync.new({
+    Name = "E$34x",
     Keybind = "LeftAlt",
     Logo = "rbxassetid://95629194286677",
     Scale = UDim2.fromScale(0.5, 0.9),  -- 40% da largura, 70% da altura da tela
@@ -235,7 +208,7 @@ else
     -- Caso não tenha informação de expiração (key permanente ou erro)
     Window:Update({ ExpireDate = "Nunca expira" })
 end
-Window:DrawCategory({ Name = "Arcane Menu V1" })
+Window:DrawCategory({ Name = "E$34x Menu V1" })
 local WlcT = Window:DrawTab({
     Name = "| Bem-Vindo",
     Icon = "newspaper",
@@ -271,7 +244,7 @@ WlcS:AddParagraph({
     Content = [[
 - Sobre nosso script e comunidade:
 
-Arcane foi iniciada pelo dev principal apos a queda do seu antigo script 
+E$34x foi iniciada pelo dev principal apos a queda do seu antigo script 
 o Famoso 1v99 que ficou muito conhecido no cenario do Sintonia RP e Role play Brasil.
 Apos a queda Desânimo bateu parei por um bom tempo e voltei com essa comunidade.
 estamos aceitando novos scripters e ajudando iniciantes sem cobrar nada.
@@ -1007,7 +980,7 @@ FlySlider = FlySection:AddSlider({
         velocidadeVoo = val
 
         if FlyTextbox then
-            FlyTextbox:Set(tostring(val))
+            FlyTextbox:SetValue(tostring(val))
         end
 
         NotifyFly("FLY", "Velocidade: "..val, 0.5)
@@ -1023,13 +996,13 @@ FlyTextbox = FlySection:AddTextBox({
             velocidadeVoo = value
 
             if FlySlider then
-                FlySlider:Set(value)
+                FlySlider:SetValue(value)
             end
 
             NotifyFly("FLY", "Velocidade: "..value, 1.5)
         else
             NotifyFly("FLY", "Valor inválido!", 2)
-            FlyTextbox:Set(tostring(velocidadeVoo))
+            FlyTextbox:SetValue(tostring(velocidadeVoo))
         end
     end
 })
@@ -2404,7 +2377,7 @@ local function toggleFullBright(enabled)
 end
 
 -- Criar notificação
-local Notifier = Arcane.newNotify()
+local Notifier = FiveSync.newNotify()
 
 
 -- Criar seção
@@ -2590,7 +2563,7 @@ if table.find(configs, "default") then
 end
 
 Notifier.new({
-    Title = "Injected - Arcane",
+    Title = "Injected - E$34x",
     Content = "[ ! ] - Carregado com sucesso.",
     Duration = 10,
     Icon = "rbxassetid://95629194286677"
