@@ -1863,7 +1863,8 @@ local Config = {
     DynamicScaling = true,
     RefreshRate = 0, -- 0 para máximo FPS
     
-    Box = { Enabled = false, Type = "Full", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1, Outline = true },
+    Box = { Enabled = false, Type = "Full", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1, Outline = true,
+            Fill = false, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.6 },
     Tracer = { Enabled = false, Origin = "Bottom", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1 },
     Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1 },
     Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1 },
@@ -1901,6 +1902,7 @@ local function ClearESP(player)
             if data.Box then
                 for _, line in pairs(data.Box) do line.Visible = false; line:Remove() end
             end
+            if data.BoxFill then data.BoxFill.Visible = false; data.BoxFill:Remove() end
             -- Remove Tracer
             if data.Tracer then data.Tracer.Visible = false; data.Tracer:Remove() end
             -- Remove Textos
@@ -1930,6 +1932,7 @@ local function InitPlayerESP(player)
     
     -- Criar 8 linhas para suportar tanto Full quanto Corner
     for i = 1, 8 do data.Box["Line"..i] = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1}) end
+    data.BoxFill = CreateDrawing("Square", {Filled = true, Visible = false, Transparency = 1})
     data.Tracer = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1})
     data.Name = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
     data.Distance = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
@@ -1960,6 +1963,7 @@ RunService.RenderStepped:Connect(function()
         for _, data in pairs(ESP_Cache) do
             pcall(function()
                 for _, v in pairs(data.Box) do v.Visible = false end
+                if data.BoxFill then data.BoxFill.Visible = false end
                 data.Tracer.Visible = false
                 data.Name.Visible = false
                 data.Distance.Visible = false
@@ -2004,6 +2008,7 @@ RunService.RenderStepped:Connect(function()
                 
                 -- Cores Dinâmicas
                 local boxColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.Color
+                local fillColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.FillColor
                 local textColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Info.Color
                 local skelColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToSkeleton) and rainbowColor or Config.Skeleton.Color
                 local tracerColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToTracer) and rainbowColor or Config.Tracer.Color
@@ -2020,6 +2025,12 @@ RunService.RenderStepped:Connect(function()
                             l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency 
                         end
                         for i=5, 8 do data.Box["Line"..i].Visible = false end
+                        if Config.Box.Fill then
+                            data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
+                            data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, Config.Box.FillTransparency, true
+                        else
+                            data.BoxFill.Visible = false
+                        end
                     else -- Corner
                         local cl = width / 4
                         data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + cl, y)
@@ -2034,9 +2045,11 @@ RunService.RenderStepped:Connect(function()
                             local l = data.Box["Line"..i]
                             l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency 
                         end
+                        data.BoxFill.Visible = false
                     end
                 else
                     for i=1, 8 do data.Box["Line"..i].Visible = false end
+                    data.BoxFill.Visible = false
                 end
 
                 -- Tracer Render
@@ -2101,6 +2114,7 @@ RunService.RenderStepped:Connect(function()
             else
                 -- Fora da tela ou distância
                 for _, v in pairs(data.Box) do v.Visible = false end
+                data.BoxFill.Visible = false
                 data.Tracer.Visible, data.Name.Visible, data.Distance.Visible, data.Item.Visible, data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthText.Visible = false, false, false, false, false, false, false
                 for _, v in pairs(data.Skeleton) do v.Visible = false end
             end
@@ -2129,6 +2143,8 @@ SecBox:AddToggle({ Name = "Ativar Box", Callback = function(v) Config.Box.Enable
 SecBox:AddDropdown({ Name = "Tipo de Box", Default = "Full", Values = {"Full", "Corner"}, Callback = function(v) Config.Box.Type = v end });
 SecBox:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Box.Thickness = v end });
 SecBox:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Box.Transparency = v end });
+SecBox:AddToggle({ Name = "Preencher Box", Default = false, Callback = function(v) Config.Box.Fill = v end }).Link:AddColorPicker({ Default = Config.Box.FillColor, Callback = function(v) Config.Box.FillColor = v end });
+SecBox:AddSlider({ Name = "Transp. Preenchimento", Min = 0, Max = 1, Default = 0.6, Round = 2, Callback = function(v) Config.Box.FillTransparency = v end });
 
 -- Seção Tracers
 local SecTracer = Tab:DrawSection({ Name = "Tracers", Position = 'left' });
