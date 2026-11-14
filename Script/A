@@ -1461,6 +1461,282 @@ WSection:AddButton({ Name = "Limpar", Callback = function() getgenv().Aimbot_Whi
 
 refreshW()
 
+-- ==============================================================
+-- SILENT AIM (reutiliza a whitelist do Aimbot: getgenv().Aimbot_Whitelist)
+-- ==============================================================
+local SilentAimTab = CombatContainer:DrawTab({
+        Name = " Silent Aim ",
+        Type = "Double",
+        EnableScrolling = true,
+});
+
+getgenv().SilentAim = getgenv().SilentAim or {
+    Enabled = false,
+    TeamCheck = false,
+    WallCheck = true,
+    IncludeNPCs = false,
+    FireFuncCheck = true,
+    TargetPart = "Head",
+    FOVRadius = 150,
+    ShowFOV = true,
+    HitChance = 100,
+    Prediction = 0.0,
+    Color = Color3.fromRGB(255, 255, 255),
+    Methods = {
+        Raycast = true,
+        FindPartOnRay = false,
+        FindPartOnRayWithIgnoreList = false,
+        FindPartOnRayWithWhitelist = false,
+        ViewportPointToRay = false,
+        ScreenPointToRay = false,
+        MouseHit = false,
+    },
+}
+local SA = getgenv().SilentAim
+
+-- Alvo atual
+local SA_TargetPart, SA_TargetPos = nil, nil
+
+-- FOV (Drawing Circle)
+local saFov
+pcall(function()
+    saFov = Drawing.new("Circle")
+    saFov.Thickness, saFov.NumSides = 1.5, 60
+    saFov.Filled, saFov.Transparency = false, 0.85
+    saFov.Visible = false
+end)
+
+-- Cache de NPCs
+local saNpcCache, saLastNpcScan = {}, 0
+local function SA_ScanNPCs()
+    local now = tick()
+    if now - saLastNpcScan < 1 then return saNpcCache end
+    saLastNpcScan = now
+    saNpcCache = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= LocalPlayer.Character then
+            local hum = v:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and not Players:GetPlayerFromCharacter(v) then
+                table.insert(saNpcCache, v)
+            end
+        end
+    end
+    return saNpcCache
+end
+
+local function SA_CheckWall(targetPos, otherChar)
+    if not SA.WallCheck then return true end
+    local ok, res = pcall(function()
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { LocalPlayer.Character, otherChar }
+        return workspace:Raycast(Camera.CFrame.Position, targetPos - Camera.CFrame.Position, params)
+    end)
+    return ok and not res
+end
+
+local function SA_Consider(model, center, best)
+    if model == LocalPlayer.Character then return best end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return best end
+    local part = model:FindFirstChild(SA.TargetPart) or model:FindFirstChild("HumanoidRootPart")
+    if not part then return best end
+    local ok, pos, onScreen = pcall(function() return Camera:WorldToViewportPoint(part.Position) end)
+    if not ok or not onScreen or pos.Z <= 0 then return best end
+    local dist = (center - Vector2.new(pos.X, pos.Y)).Magnitude
+    if dist > SA.FOVRadius or (best and dist >= best.dist) then return best end
+    return { model = model, part = part, pos = part.Position, dist = dist }
+end
+
+local function SA_UpdateTarget()
+    if not SA.Enabled or not LocalPlayer.Character then
+        SA_TargetPart, SA_TargetPos = nil, nil
+        return
+    end
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local best = nil
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        -- Reutiliza a whitelist do Aimbot (ignora quem ja esta na lista)
+        if getgenv().Aimbot_Whitelist and getgenv().Aimbot_Whitelist[plr.Name] then continue end
+        if SA.TeamCheck and plr.Team == LocalPlayer.Team then continue end
+        local char = plr.Character
+        if char then
+            best = SA_Consider(char, center, best)
+        end
+    end
+    if SA.IncludeNPCs then
+        for _, model in ipairs(SA_ScanNPCs()) do
+            best = SA_Consider(model, center, best)
+        end
+    end
+    if best and not SA_CheckWall(best.pos, best.model) then
+        best = nil
+    end
+    if best then
+        SA_TargetPart = best.part
+        local p = best.pos
+        if SA.Prediction > 0 and best.part:IsA("BasePart") then
+            p = p + (best.part.AssemblyLinearVelocity or Vector3.zero) * SA.Prediction
+        end
+        SA_TargetPos = p
+    else
+        SA_TargetPart, SA_TargetPos = nil, nil
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        pcall(SA_UpdateTarget)
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if not saFov then return end
+    if SA.Enabled and SA.ShowFOV then
+        saFov.Visible = true
+        saFov.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        saFov.Radius = SA.FOVRadius
+        saFov.Color = SA.Color
+    else
+        saFov.Visible = false
+    end
+end)
+
+local function SA_PassChance()
+    if SA.HitChance >= 100 then return true end
+    return math.random(1, 100) <= SA.HitChance
+end
+
+local SA_FireKeywords = {
+    "bullet", "gun", "fire", "shoot", "weapon", "projectile",
+    "shot", "raycast", "attack", "aim", "combat", "blaster"
+}
+local function SA_IsFireFunc()
+    if not SA.FireFuncCheck then return true end
+    local tb = debug.traceback():lower()
+    for _, kw in ipairs(SA_FireKeywords) do
+        if tb:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+if not getgenv()._E34xSilentAimHooked then
+    getgenv()._E34xSilentAimHooked = true
+
+    local _checkcaller = checkcaller or function() return false end
+    local _hookmetamethod = hookmetamethod
+    local _getnamecallmethod = getnamecallmethod
+
+    if _hookmetamethod and _getnamecallmethod then
+        local oldNamecall
+        oldNamecall = _hookmetamethod(game, "__namecall", function(...)
+            local method = _getnamecallmethod()
+            if not SA.Enabled or not SA_TargetPos or _checkcaller() or not SA_PassChance() then
+                return oldNamecall(...)
+            end
+            local self = select(1, ...)
+            if method == "Raycast" and SA.Methods.Raycast and self == workspace and SA_IsFireFunc() then
+                local args = {...}
+                args[3] = (SA_TargetPos - args[2]).Unit * 1000
+                return oldNamecall(unpack(args))
+            end
+            if self == workspace and SA_IsFireFunc() then
+                if (method == "FindPartOnRay" or method == "findPartOnRay") and SA.Methods.FindPartOnRay then
+                    local args = {...}
+                    local ray = args[2]
+                    if typeof(ray) == "Ray" then
+                        args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                        return oldNamecall(unpack(args))
+                    end
+                end
+                if method == "FindPartOnRayWithIgnoreList" and SA.Methods.FindPartOnRayWithIgnoreList then
+                    local args = {...}
+                    local ray = args[2]
+                    if typeof(ray) == "Ray" then
+                        args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                        return oldNamecall(unpack(args))
+                    end
+                end
+                if method == "FindPartOnRayWithWhitelist" and SA.Methods.FindPartOnRayWithWhitelist then
+                    local args = {...}
+                    local ray = args[2]
+                    if typeof(ray) == "Ray" then
+                        args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                        return oldNamecall(unpack(args))
+                    end
+                end
+            end
+            if self == Camera and SA_IsFireFunc() then
+                if method == "ViewportPointToRay" and SA.Methods.ViewportPointToRay then
+                    local origin = Camera.CFrame.Position
+                    return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+                end
+                if method == "ScreenPointToRay" and SA.Methods.ScreenPointToRay then
+                    local origin = Camera.CFrame.Position
+                    return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+                end
+            end
+            return oldNamecall(...)
+        end)
+
+        local oldIndex
+        oldIndex = _hookmetamethod(game, "__index", function(t, k)
+            if SA.Enabled and SA_TargetPos and not _checkcaller() and SA_PassChance() then
+                if typeof(t) == "Instance" and t:IsA("Mouse") and SA_IsFireFunc() then
+                    if k == "Hit" and SA.Methods.MouseHit then
+                        return CFrame.new(SA_TargetPos)
+                    elseif k == "Target" and SA.Methods.MouseHit then
+                        return SA_TargetPart
+                    elseif (k == "X" or k == "Y") and SA.Methods.MouseHit then
+                        local p = Camera:WorldToScreenPoint(SA_TargetPos)
+                        return p[k]
+                    elseif k == "UnitRay" and SA.Methods.MouseHit then
+                        local origin = oldIndex(t, "UnitRay").Origin
+                        return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+                    end
+                end
+            end
+            return oldIndex(t, k)
+        end)
+    end
+end
+
+-- UI
+local SAConfig = SilentAimTab:DrawSection({ Name = "Configurações", Position = 'left' });
+local SAVisual = SilentAimTab:DrawSection({ Name = "Visual & Métodos", Position = 'right' });
+
+SAConfig:AddToggle({ Name = "Ativar Silent Aim", Default = false, Flag = "SilentAim_Enabled", Callback = function(v) SA.Enabled = v end });
+SAConfig:AddToggle({ Name = "Team Check", Default = false, Flag = "SilentAim_Team", Callback = function(v) SA.TeamCheck = v end });
+SAConfig:AddToggle({ Name = "Incluir NPCs", Default = false, Flag = "SilentAim_NPC", Callback = function(v) SA.IncludeNPCs = v end });
+SAConfig:AddToggle({ Name = "Wall Check", Default = true, Flag = "SilentAim_Wall", Callback = function(v) SA.WallCheck = v end });
+SAConfig:AddToggle({ Name = "Fire Func Check", Default = true, Flag = "SilentAim_FireFunc", Callback = function(v) SA.FireFuncCheck = v end });
+SAConfig:AddDropdown({ Name = "Parte Alvo", Default = "Head", Values = {"Head", "UpperTorso", "LowerTorso", "HumanoidRootPart", "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm", "LeftUpperLeg", "RightUpperLeg"}, Callback = function(v) SA.TargetPart = v end });
+SAConfig:AddSlider({ Name = "FOV Radius", Min = 20, Max = 500, Default = 150, Callback = function(v) SA.FOVRadius = v end });
+SAConfig:AddSlider({ Name = "Hit Chance (%)", Min = 1, Max = 100, Default = 100, Callback = function(v) SA.HitChance = v end });
+SAConfig:AddSlider({ Name = "Predição", Min = 0, Max = 0.5, Default = 0, Round = 2, Callback = function(v) SA.Prediction = v end });
+
+SAVisual:AddToggle({ Name = "Mostrar FOV", Default = true, Flag = "SilentAim_ShowFOV", Callback = function(v) SA.ShowFOV = v end });
+SAVisual:AddColorPicker({ Name = "Cor do FOV", Default = Color3.fromRGB(255, 255, 255), Callback = function(c) SA.Color = c end });
+SAVisual:AddDropdown({
+    Name = "Métodos",
+    Default = {"Raycast"},
+    Values = {"Raycast", "FindPartOnRay", "FindPartOnRayWithIgnoreList", "FindPartOnRayWithWhitelist", "ViewportPointToRay", "ScreenPointToRay", "MouseHit"},
+    Multi = true,
+    Callback = function(values)
+        for k in pairs(SA.Methods) do SA.Methods[k] = false end
+        if typeof(values) == "table" then
+            for k, on in pairs(values) do
+                if on and SA.Methods[k] ~= nil then SA.Methods[k] = true end
+            end
+        end
+    end
+});
+SAVisual:AddParagraph({ Title = "Whitelist", Content = "O Silent Aim ignora automaticamente quem estiver na aba WhiteList." })
+
+
+
 
 
 local HitboxTab = CombatContainer:DrawTab({
