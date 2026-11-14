@@ -360,6 +360,21 @@ local Compkiller = {
 	ProtectGui = protect_gui or protectgui or (syn and syn.protect_gui) or function(s) return s; end,
 };
 
+Compkiller.MobileConfig = {
+	Enabled = false,
+	DisableBlur = true,
+	DisableHover = true,
+	DisableAnimations = true,
+	DisableDragBlacklistListener = true,
+	MainLoopDelay = 0.1,
+	KeybindsDelay = 0.1,
+	KeybindHandlerDelay = 0.05,
+	BlurDelay = 0.5,
+	ColorPickerDelay = 0.03,
+	CloseButtonDelay = 0.5,
+	ConfigRefreshDelay = 0.5,
+};
+
 Compkiller.Colors = {
 	Highlight = Color3.fromRGB(17, 238, 253),
 	Toggle = Color3.fromRGB(14, 203, 213),
@@ -1407,8 +1422,16 @@ Compkiller.FontAwesome = {
 	['magnifying-glass'] = "rbxassetid://74387839235930",
 };
 
-function Compkiller:OptimizeMode(v)
+function Compkiller:OptimizeMode(v , config)
 	Compkiller.PerformanceMode = v;
+
+	if v and config then
+		for i , val in next , config do
+			Compkiller.MobileConfig[i] = val;
+		end;
+	end;
+
+	Compkiller.MobileConfig.Enabled = v and true or false;
 
 	for _ , Window in next , Compkiller.WindowsArgs do
 		Window.PerformanceMode = v;
@@ -1419,13 +1442,25 @@ function Compkiller:IsMobile()
 	return Compkiller:_IsMobile();
 end;
 
-function Compkiller:AutoOptimize()
+function Compkiller:AutoOptimize(config)
 	if Compkiller:_IsMobile() then
-		Compkiller:OptimizeMode(true);
+		Compkiller:OptimizeMode(true , config);
 		return true;
 	end;
 
 	return false;
+end;
+
+function Compkiller:SetMobileConfig(config)
+	if not config then
+		return Compkiller.MobileConfig;
+	end;
+
+	for i , val in next , config do
+		Compkiller.MobileConfig[i] = val;
+	end;
+
+	return Compkiller.MobileConfig;
 end;
 
 function Compkiller:IsStudio()
@@ -1517,6 +1552,14 @@ function Compkiller:_Rounding(num: number, numDecimalPlaces: number) : number
 end;
 
 function Compkiller:_Animation(Self: Instance , Info: TweenInfo , Property :{[K] : V})
+	if Compkiller.PerformanceMode and Compkiller.MobileConfig.DisableAnimations then
+		for K , V in next , Property do
+			Self[K] = V;
+		end;
+
+		return;
+	end;
+
 	local Tween = TweenService:Create(Self , Info or TweenInfo.new(0.25) , Property);
 
 	Tween:Play();
@@ -1552,7 +1595,7 @@ function Compkiller:GetCalculatePosition(planePos: number, planeNormal: number, 
 end;
 
 function Compkiller:_Blur(element : Frame , WindowRemote) : RBXScriptSignal
-	if Compkiller.PerformanceMode then
+	if Compkiller.PerformanceMode and Compkiller.MobileConfig.DisableBlur then
 		return game.Changed:Connect(function() end);
 	end;
 
@@ -1673,7 +1716,7 @@ function Compkiller:_Blur(element : Frame , WindowRemote) : RBXScriptSignal
 	end);
 
 	local THREAD = task.spawn(function()
-		while true do task.wait(0.1)
+		while true do task.wait(Compkiller.PerformanceMode and Compkiller.MobileConfig.BlurDelay or 0.1)
 			pcall(UpdateFunction);
 		end;
 	end);
@@ -1718,6 +1761,10 @@ function Compkiller:_AddDragBlacklist(Frame: Frame)
 	Frame.InputEnded:Connect(function(input)
 		SET_BLACKLIST(false);
 	end);
+
+	if Compkiller.PerformanceMode and Compkiller.MobileConfig.DisableDragBlacklistListener then
+		return;
+	end;
 
 	UserInputService.InputChanged:Connect(function()
 		if not Compkiller:_IsMouseOverFrame(Frame) then
@@ -1783,7 +1830,7 @@ function Compkiller.__SIGNAL(default)
 end;
 
 function Compkiller:_Hover(Frame: Frame , OnHover: () -> any?, Release: () -> any?)
-	if Compkiller.PerformanceMode then
+	if Compkiller.PerformanceMode and Compkiller.MobileConfig.DisableHover then
 		return;
 	end;
 
@@ -3154,7 +3201,7 @@ function Compkiller:_AddColorPickerPanel(Button: ImageButton , Callback: (Color:
 			end;
 
 			SPAWN_THREAD = task.spawn(function()
-				while true do task.wait(0.00001)
+				while true do task.wait(Compkiller.PerformanceMode and Compkiller.MobileConfig.ColorPickerDelay or 0.00001)
 					if not Args.IsHold then
 						break;	
 					end;
@@ -3387,7 +3434,7 @@ function Compkiller:_DrawKeybinds(Window: ScreenGui)
 	};
 
 	Ref.THREAD = task.spawn(function()
-		while true do task.wait()
+		while true do task.wait(Compkiller.PerformanceMode and Compkiller.MobileConfig.KeybindsDelay or 0)
 			Compkiller:_Animation(MainFrame,TweenInfo.new(0.4),{
 				Size = UDim2.new(1, 30, 1, UIListLayout.AbsoluteContentSize.Y + 1)
 			});
@@ -3853,7 +3900,7 @@ function Compkiller:_KeybindHandler(Parent: Frame , ObjectType: string , Element
 	end;
 
 	APIRef.Thread = task.spawn(function()
-		while true do task.wait(0.01)
+		while true do task.wait(Compkiller.PerformanceMode and Compkiller.MobileConfig.KeybindHandlerDelay or 0.01)
 			if APIRef.Mode ~= 1 then
 				if ElementAPI:GetValue() == APIRef.On then
 					KeybindFrame:SetVisible(true);
@@ -8708,7 +8755,7 @@ function Compkiller.new(Config : Window)
 			Init.THREAD = task.spawn(function()
 				local OldIndex = Configuration.Config:GetConfigCount();
 
-				while true do task.wait(0.125);
+				while true do task.wait(Compkiller.PerformanceMode and Compkiller.MobileConfig.ConfigRefreshDelay or 0.125);
 					local CountInDirectory = Configuration.Config:GetConfigCount();
 
 					if OldIndex ~= CountInDirectory then
@@ -9850,7 +9897,7 @@ function Compkiller.new(Config : Window)
 		end;
 
 		table.insert(WindowArgs.THREADS,task.spawn(function()
-			while true do task.wait(0.15)
+			while true do task.wait(WindowArgs.PerformanceMode and Compkiller.MobileConfig.CloseButtonDelay or 0.15)
 				if Compkiller:_IsMobile() then
 					ToggleCloseUI(true);
 
@@ -9954,7 +10001,15 @@ function Compkiller.new(Config : Window)
 			Property = "BackgroundColor3"
 		});
 
-		while true do task.wait(WindowArgs.PerformanceMode and 0.05 or 0.01);
+		while true do task.wait(WindowArgs.PerformanceMode and Compkiller.MobileConfig.MainLoopDelay or 0.01);
+			if WindowArgs.PerformanceMode and not WindowArgs.IsOpen then
+				Compkiller:_Animation(SelectionFrame , TweenInfo.new(0.15) , {
+					BackgroundTransparency = 1
+				});
+
+				continue;
+			end;
+
 			BlurElement.Size = UDim2.new(1, TabFrame.AbsoluteSize.X - 35, 1, 0);
 			MovementFrame.Size = UDim2.new(1, TabFrame.AbsoluteSize.X - 35, 1, 0);
 
