@@ -19,18 +19,29 @@ if FiveSync:IsMobile() then
 else
     print("[E$34x] Desktop detectado - modo normal.")
 end
-FiveSync.Colors.Highlight = Color3.fromRGB(255, 0, 0)
-FiveSync.Colors.Toggle = Color3.fromRGB(220, 0, 20)
+-- Tema: preto e branco neon (branco bem brilhante sobre preto)
+FiveSync.Colors.Highlight       = Color3.fromRGB(255, 255, 255)
+FiveSync.Colors.Toggle          = Color3.fromRGB(255, 255, 255)
+FiveSync.Colors.SwitchColor     = Color3.fromRGB(255, 255, 255)
+FiveSync.Colors.StrokeColor     = Color3.fromRGB(255, 255, 255)
+FiveSync.Colors.HighStrokeColor = Color3.fromRGB(255, 255, 255)
+FiveSync.Colors.LineColor       = Color3.fromRGB(255, 255, 255)
+FiveSync.Colors.Risky           = Color3.fromRGB(255, 255, 255)
+FiveSync.Colors.BGDBColor       = Color3.fromRGB(0, 0, 0)
+FiveSync.Colors.BlockColor      = Color3.fromRGB(6, 6, 6)
+FiveSync.Colors.BlockBackground = Color3.fromRGB(16, 16, 16)
+FiveSync.Colors.DropColor       = Color3.fromRGB(12, 12, 12)
+FiveSync.Colors.MouseEnter      = Color3.fromRGB(40, 40, 40)
 local Notifier = FiveSync.newNotify()
 local ConfigManager = FiveSync:ConfigManager({
     Directory = "E$34x",
     Config = "E$34x-Configs"
 })
-FiveSync:Loader("rbxassetid://95629194286677", 2.5).yield()
+FiveSync:Loader("rbxassetid://117056629401480", 2.5).yield()
 local Window = FiveSync.new({
     Name = "E$34x",
     Keybind = "LeftAlt",
-    Logo = "rbxassetid://95629194286677",
+    Logo = "rbxassetid://117056629401480",
     Scale = UDim2.fromScale(0.5, 0.9),  -- 40% da largura, 70% da altura da tela
     TextSize = 15,
 })
@@ -209,7 +220,7 @@ local function StartSpeedLoop()
         Title = "[!] - Spedd",
         Content = "Ligado (" .. SpeedMode .. ")",
         Duration = 2,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 local function StopSpeedLoop()
@@ -231,7 +242,7 @@ local function StopSpeedLoop()
         Title = "Movimento",
         Content = "Desligado",
         Duration = 2,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 local function ToggleSpeed(state)
@@ -266,7 +277,7 @@ MovementSection:AddDropdown({
                 Title = "[ ! ] - Speed On",
                 Content = "Método: " .. tostring(selection),
                 Duration = 2,
-                Icon = "rbxassetid://95629194286677"
+                Icon = "rbxassetid://117056629401480"
             })
         end
     end
@@ -293,7 +304,7 @@ SliderSpeedAPI = MovementSection:AddSlider({
             Title = "Speed",
             Content = "Velocidade Ajustada: " .. tostring(roundedValue),
             Duration = 1.5,
-            Icon = "rbxassetid://95629194286677"
+            Icon = "rbxassetid://117056629401480"
         })
     end
 })
@@ -354,7 +365,7 @@ local function Notify(txt)
         Title = "[!] - Jump",
         Content = txt,
         Duration = 1.5,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 local function GetHumanoid()
@@ -595,7 +606,7 @@ local function SpinNotify(text)
         Title = "Spin",
         Content = text,
         Duration = 1.5,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 local function GetCharacterHumanoidRoot()
@@ -694,7 +705,7 @@ local function NotifyFly(title, text, time)
         Title = title,
         Content = text,
         Duration = time or 1.5,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 local DescerBTN = CoreGui:FindFirstChild("FlyDownBTN")
@@ -880,7 +891,7 @@ local function NotifySky(txt)
         Title = "Sky Base",
         Content = txt,
         Duration = 1.5,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 local function GetChar()
@@ -1029,7 +1040,7 @@ local function NotifyNC(txt)
         Title = "Noclip",
         Content = txt,
         Duration = 1.5,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 local function GetChar()
@@ -1765,7 +1776,7 @@ HitboxVisualSection:AddButton({
             Title = "Hitbox",
             Content = "Hitboxes resetadas!",
             Duration = 2,
-            Icon = "rbxassetid://95629194286677"
+            Icon = "rbxassetid://117056629401480"
         })
     end
 })
@@ -2249,7 +2260,7 @@ VisualSection:AddToggle({
             Title = "FullBright",
             Content = enabled and "✓ FullBright ATIVADO" or "✗ FullBright DESATIVADO",
             Duration = 2,
-            Icon = "rbxassetid://95629194286677"
+            Icon = "rbxassetid://117056629401480"
         })
     end
 })
@@ -2270,7 +2281,7 @@ VisualSection:AddButton({
                 Title = "FullBright",
                 Content = "Iluminação resetada para o padrão",
                 Duration = 2,
-                Icon = "rbxassetid://95629194286677"
+                Icon = "rbxassetid://117056629401480"
             })
         else
             disableFullBright()
@@ -2278,7 +2289,7 @@ VisualSection:AddButton({
                 Title = "FullBright",
                 Content = "Configurações originais restauradas",
                 Duration = 2,
-                Icon = "rbxassetid://95629194286677"
+                Icon = "rbxassetid://117056629401480"
             })
         end
     end
@@ -2312,7 +2323,7 @@ local function NotifyCam(txt)
         Title = "Câmera",
         Content = txt,
         Duration = 1.5,
-        Icon = "rbxassetid://95629194286677"
+        Icon = "rbxassetid://117056629401480"
     })
 end
 
@@ -2545,7 +2556,7 @@ Settings:AddButton({
             Title = "Notification",
             Content = "Copied Them Color to your clipboard",
             Duration = 5,
-            Icon = "rbxassetid://95629194286677"
+            Icon = "rbxassetid://117056629401480"
         });
     end,
 })
@@ -2585,7 +2596,7 @@ Notifier.new({
     Title = "Injected - E$34x",
     Content = "[ ! ] - Carregado com sucesso.",
     Duration = 10,
-    Icon = "rbxassetid://95629194286677"
+    Icon = "rbxassetid://117056629401480"
 })
 
 
