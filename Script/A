@@ -1864,7 +1864,8 @@ local Config = {
     RefreshRate = 0, -- 0 para máximo FPS
     
     Box = { Enabled = false, Type = "Full", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1, Outline = true,
-            Fill = false, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.6 },
+            Fill = false, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.6,
+            Gradient = false, GradientColor = Color3.fromRGB(0, 0, 255) },
     Tracer = { Enabled = false, Origin = "Bottom", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1 },
     Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1 },
     Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1 },
@@ -1903,6 +1904,9 @@ local function ClearESP(player)
                 for _, line in pairs(data.Box) do line.Visible = false; line:Remove() end
             end
             if data.BoxFill then data.BoxFill.Visible = false; data.BoxFill:Remove() end
+            if data.BoxGradient then
+                for _, g in pairs(data.BoxGradient) do g.Visible = false; g:Remove() end
+            end
             -- Remove Tracer
             if data.Tracer then data.Tracer.Visible = false; data.Tracer:Remove() end
             -- Remove Textos
@@ -1933,6 +1937,7 @@ local function InitPlayerESP(player)
     -- Criar 8 linhas para suportar tanto Full quanto Corner
     for i = 1, 8 do data.Box["Line"..i] = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1}) end
     data.BoxFill = CreateDrawing("Square", {Filled = true, Visible = false, Transparency = 1})
+    data.BoxGradient = {}
     data.Tracer = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1})
     data.Name = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
     data.Distance = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
@@ -1964,6 +1969,7 @@ RunService.RenderStepped:Connect(function()
             pcall(function()
                 for _, v in pairs(data.Box) do v.Visible = false end
                 if data.BoxFill then data.BoxFill.Visible = false end
+                if data.BoxGradient then for _, g in pairs(data.BoxGradient) do g.Visible = false end end
                 data.Tracer.Visible = false
                 data.Name.Visible = false
                 data.Distance.Visible = false
@@ -2031,6 +2037,26 @@ RunService.RenderStepped:Connect(function()
                         else
                             data.BoxFill.Visible = false
                         end
+                        if Config.Box.Fill and Config.Box.Gradient then
+                            local gColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.GradientColor
+                            local steps = 24
+                            local stepH = height / steps
+                            local gradTop = 1 - Config.Box.FillTransparency
+                            local gradBot = Config.Box.FillTransparency
+                            data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, gradTop, true
+                            for s = 1, steps do
+                                local st = (s - 1) / (steps - 1)
+                                local g = data.BoxGradient["Step"..s]
+                                if not g then g = CreateDrawing("Square", {Filled = true}); data.BoxGradient["Step"..s] = g end
+                                g.Position = Vector2.new(x, y + (s - 1) * stepH)
+                                g.Size = Vector2.new(width, stepH + 1)
+                                g.Color = fillColor:Lerp(gColor, st)
+                                g.Transparency = gradTop + (gradBot - gradTop) * st
+                                g.Visible = true
+                            end
+                        else
+                            for _, g in pairs(data.BoxGradient) do g.Visible = false end
+                        end
                     else -- Corner
                         local cl = width / 4
                         data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + cl, y)
@@ -2046,10 +2072,12 @@ RunService.RenderStepped:Connect(function()
                             l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency 
                         end
                         data.BoxFill.Visible = false
+                        for _, g in pairs(data.BoxGradient) do g.Visible = false end
                     end
                 else
                     for i=1, 8 do data.Box["Line"..i].Visible = false end
                     data.BoxFill.Visible = false
+                    for _, g in pairs(data.BoxGradient) do g.Visible = false end
                 end
 
                 -- Tracer Render
@@ -2115,6 +2143,7 @@ RunService.RenderStepped:Connect(function()
                 -- Fora da tela ou distância
                 for _, v in pairs(data.Box) do v.Visible = false end
                 data.BoxFill.Visible = false
+                for _, g in pairs(data.BoxGradient) do g.Visible = false end
                 data.Tracer.Visible, data.Name.Visible, data.Distance.Visible, data.Item.Visible, data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthText.Visible = false, false, false, false, false, false, false
                 for _, v in pairs(data.Skeleton) do v.Visible = false end
             end
@@ -2145,6 +2174,7 @@ SecBox:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback 
 SecBox:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Box.Transparency = v end });
 SecBox:AddToggle({ Name = "Preencher Box", Default = false, Callback = function(v) Config.Box.Fill = v end }).Link:AddColorPicker({ Default = Config.Box.FillColor, Callback = function(v) Config.Box.FillColor = v end });
 SecBox:AddSlider({ Name = "Transp. Preenchimento", Min = 0, Max = 1, Default = 0.6, Round = 2, Callback = function(v) Config.Box.FillTransparency = v end });
+SecBox:AddToggle({ Name = "Gradiente", Default = false, Callback = function(v) Config.Box.Gradient = v end }).Link:AddColorPicker({ Default = Config.Box.GradientColor, Callback = function(v) Config.Box.GradientColor = v end });
 
 -- Seção Tracers
 local SecTracer = Tab:DrawSection({ Name = "Tracers", Position = 'left' });
@@ -2424,6 +2454,114 @@ CameraSection:AddSlider({
         NotifyCam("Zoom: "..MaxZoom)
     end
 })
+
+-- ==============================================================
+-- Seção Motion Blur (aba Mundo) - Blur dinâmico por velocidade da câmera
+-- ==============================================================
+local MotionBlurSection = WorldTab:DrawSection({
+    Name = "Motion Blur",
+    Position = "left"
+})
+
+local motionBlur = nil
+local motionBlurEnabled = false
+local motionBlurAmount = 15
+local motionBlurAmplifier = 5
+local lastLookVector = Camera.CFrame.LookVector
+
+local function ensureMotionBlur()
+    if not Camera then return nil end
+    if not motionBlur or not motionBlur.Parent then
+        motionBlur = Instance.new("BlurEffect")
+        motionBlur.Name = "E34xMotionBlur"
+        motionBlur.Parent = Camera
+    end
+    return motionBlur
+end
+
+local function removeMotionBlur()
+    if motionBlur then
+        motionBlur:Destroy()
+        motionBlur = nil
+    end
+end
+
+local function updateMotionBlur()
+    local blur = ensureMotionBlur()
+    if not blur then return end
+    local magnitude = (Camera.CFrame.LookVector - lastLookVector).Magnitude
+    blur.Size = math.clamp(math.abs(magnitude) * motionBlurAmount * motionBlurAmplifier / 2, 0, 56)
+    lastLookVector = Camera.CFrame.LookVector
+end
+
+workspace.Changed:Connect(function(property)
+    if property == "CurrentCamera" then
+        Camera = workspace.CurrentCamera
+        lastLookVector = Camera.CFrame.LookVector
+        if motionBlurEnabled then
+            motionBlur = nil
+            ensureMotionBlur()
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if not motionBlurEnabled then return end
+    updateMotionBlur()
+end)
+
+local function setMotionBlur(state)
+    motionBlurEnabled = state
+    if state then
+        lastLookVector = Camera.CFrame.LookVector
+        ensureMotionBlur()
+    else
+        removeMotionBlur()
+    end
+end
+
+MotionBlurSection:AddParagraph({
+    Title = "Motion Blur",
+    Content = "Desfoque dinâmico baseado na velocidade de rotação da câmera."
+})
+
+MotionBlurSection:AddToggle({
+    Name = "Ativar Motion Blur",
+    Default = false,
+    Flag = "Visual_MotionBlur",
+    Callback = function(v)
+        setMotionBlur(v)
+        Notifier.new({
+            Title = "Motion Blur",
+            Content = v and "Ativado" or "Desativado",
+            Duration = 1.5,
+            Icon = "rbxassetid://117056629401480"
+        })
+    end
+})
+
+MotionBlurSection:AddSlider({
+    Name = "Intensidade",
+    Min = 0,
+    Max = 100,
+    Default = motionBlurAmount,
+    Flag = "Visual_MotionBlurAmount",
+    Callback = function(v)
+        motionBlurAmount = v
+    end
+})
+
+MotionBlurSection:AddSlider({
+    Name = "Amplificador",
+    Min = 1,
+    Max = 20,
+    Default = motionBlurAmplifier,
+    Flag = "Visual_MotionBlurAmp",
+    Callback = function(v)
+        motionBlurAmplifier = v
+    end
+})
+
 
 -- ==============================================================
 -- Aba Misc: Settings (UI) e Temas (nomes/ícones/cores do exemplo)
