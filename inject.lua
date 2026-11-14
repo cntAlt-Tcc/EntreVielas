@@ -6409,7 +6409,7 @@ function FiveSync.new(Config : Window)
 		WindowArgs.AlwayShowTab = true;
 	end;
 
-	local FiveSync = Instance.new("ScreenGui")
+	local ScreenGuiObj = Instance.new("ScreenGui")
 	local MainFrame = Instance.new("Frame")
 	local UICorner = Instance.new("UICorner")
 	local TabFrame = Instance.new("Frame")
@@ -6429,28 +6429,28 @@ function FiveSync.new(Config : Window)
 	local ExpireText = Instance.new("TextLabel")
 	local TabMainFrame = Instance.new("Frame")
 
-	FiveSync:_DrawKeybinds(FiveSync);
+	FiveSync:_DrawKeybinds(ScreenGuiObj);
 
 	UIListLayout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
 		TabButtonScrollingFrame.CanvasSize = UDim2.fromOffset(0,UIListLayout.AbsoluteContentSize.Y)
 	end);
 
-	FiveSync.Name = "u?name=fivesync_?"..FiveSync:_RandomString();
-	FiveSync.Parent = CoreGui;
-	FiveSync.ResetOnSpawn = false
-	FiveSync.IgnoreGuiInset = true;
-	FiveSync.ZIndexBehavior = Enum.ZIndexBehavior.Global;
+	ScreenGuiObj.Name = "u?name=fivesync_?"..FiveSync:_RandomString();
+	ScreenGuiObj.Parent = CoreGui;
+	ScreenGuiObj.ResetOnSpawn = false
+	ScreenGuiObj.IgnoreGuiInset = true;
+	ScreenGuiObj.ZIndexBehavior = Enum.ZIndexBehavior.Global;
 
-	FiveSync.ProtectGui(FiveSync);
+	FiveSync.ProtectGui(ScreenGuiObj);
 
-	WindowArgs.Root = FiveSync;
+	WindowArgs.Root = ScreenGuiObj;
 
-	table.insert(FiveSync.Windows , FiveSync);
+	table.insert(FiveSync.Windows , ScreenGuiObj);
 	table.insert(FiveSync.WindowsArgs , WindowArgs);
 
 	MainFrame.Active = true;
 	MainFrame.Name = FiveSync:_RandomString()
-	MainFrame.Parent = FiveSync
+	MainFrame.Parent = ScreenGuiObj
 	MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 	MainFrame.BackgroundColor3 = FiveSync.Colors.BGDBColor
 
@@ -6857,7 +6857,7 @@ function FiveSync.new(Config : Window)
 		local ImageLabel = Instance.new("ImageLabel")
 
 		UserSettings.Name = FiveSync:_RandomString()
-		UserSettings.Parent = FiveSync;
+		UserSettings.Parent = ScreenGuiObj;
 		UserSettings.BackgroundColor3 = FiveSync.Colors.BGDBColor;
 		UserSettings.BackgroundTransparency = 1
 		UserSettings.BorderColor3 = Color3.fromRGB(0, 0, 0)
@@ -7010,7 +7010,7 @@ function FiveSync.new(Config : Window)
 	end;
 
 	function WindowArgs:SetVisible(bool: boolean)
-		FiveSync.Enabled = bool;
+		ScreenGuiObj.Enabled = bool;
 	end;
 
 	function WindowArgs:DrawCategory(config : Category)
@@ -9598,7 +9598,7 @@ function FiveSync.new(Config : Window)
 		local ImageLabel = Instance.new("ImageLabel")
 
 		CloseWindow.Name = FiveSync:_RandomString()
-		CloseWindow.Parent = FiveSync
+		CloseWindow.Parent = ScreenGuiObj
 		CloseWindow.AnchorPoint = Vector2.new(1, 0)
 		CloseWindow.BackgroundColor3 = FiveSync.Colors.BGDBColor
 
@@ -9672,7 +9672,7 @@ function FiveSync.new(Config : Window)
 			local UIListLayout = Instance.new("UIListLayout")
 
 			Watermark.Name = FiveSync:_RandomString()
-			Watermark.Parent = FiveSync
+			Watermark.Parent = ScreenGuiObj
 			Watermark.AnchorPoint = Vector2.new(1, 0)
 			Watermark.BackgroundColor3 = FiveSync.Colors.BGDBColor
 
@@ -10354,21 +10354,21 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 end;
 
 function FiveSync:Loader(IconId,Duration)
-	local FiveSync = Instance.new("ScreenGui")
+	local ScreenGuiObj = Instance.new("ScreenGui")
 
-	FiveSync.Name = FiveSync:_RandomString()
-	FiveSync.Parent = CoreGui
-	FiveSync.Enabled = true
-	FiveSync.ResetOnSpawn = false
-	FiveSync.IgnoreGuiInset = true
-	FiveSync.ZIndexBehavior = Enum.ZIndexBehavior.Global
+	ScreenGuiObj.Name = FiveSync:_RandomString()
+	ScreenGuiObj.Parent = CoreGui
+	ScreenGuiObj.Enabled = true
+	ScreenGuiObj.ResetOnSpawn = false
+	ScreenGuiObj.IgnoreGuiInset = true
+	ScreenGuiObj.ZIndexBehavior = Enum.ZIndexBehavior.Global
 
 	local Loader = Instance.new("Frame")
 	local Icon = Instance.new("ImageLabel")
 	local Vignette = Instance.new("ImageLabel")
 
 	Loader.Name = FiveSync:_RandomString()
-	Loader.Parent = FiveSync
+	Loader.Parent = ScreenGuiObj
 	Loader.AnchorPoint = Vector2.new(0.5, 0.5)
 	Loader.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 	Loader.BackgroundTransparency = 1
@@ -10440,7 +10440,7 @@ function FiveSync:Loader(IconId,Duration)
 				task.wait(0.2)
 
 				task.delay(3,function()
-					FiveSync:Destroy();
+					ScreenGuiObj:Destroy();
 				end)
 			end)
 
