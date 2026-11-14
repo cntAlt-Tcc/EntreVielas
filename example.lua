@@ -2,9 +2,9 @@
 	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
 ]]
 --[[
-		Example Compkiller UI
+		FiveSync UI - Example
 
-	Author: 4lpaca
+	Made by EntreViela$ Team
 
 	Press Left Alt to open / close
 
@@ -13,14 +13,14 @@
 ]]
 
 
-local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
+local FiveSync = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
 
 
 -- Mobile Optimization --
 -- Detecta mobile e liga o modo otimizado. Você pode ajustar o comportamento
 -- passando uma config (opcional); os valores abaixo já são os padrões.
-if Compkiller:IsMobile() then
-	Compkiller:OptimizeMode(true , {
+if FiveSync:IsMobile() then
+	FiveSync:OptimizeMode(true , {
 		DisableBlur = true,               -- desliga o acrylic/blur (mais pesado)
 		DisableHover = true,              -- desliga efeitos de hover
 		DisableAnimations = true,         -- aplica as propriedades sem tween
@@ -34,33 +34,33 @@ if Compkiller:IsMobile() then
 		ConfigRefreshDelay = 0.5,
 	});
 
-	print("[COMPKILLER] Mobile detectado - modo otimizado ativado.");
+	print("[FIVESYNC] Mobile detectado - modo otimizado ativado.");
 else
-	print("[COMPKILLER] Desktop detectado - modo normal.");
+	print("[FIVESYNC] Desktop detectado - modo normal.");
 end;
 
 
 -- Create Notification --
-local Notifier = Compkiller.newNotify();
+local Notifier = FiveSync.newNotify();
 
 
 -- Create Config Mamager --
-local ConfigManager = Compkiller:ConfigManager({
-	Directory = "Compkiller-UI",
+local ConfigManager = FiveSync:ConfigManager({
+	Directory = "FiveSync-UI",
 	Config = "Example-Configs"
 });
 
 
 -- Loading UI (Icon <string> , Duration <number>) --
-Compkiller:Loader("rbxassetid://120245531583106" , 2.5).yield();
+FiveSync:Loader("rbxassetid://117056629401480" , 2.5).yield();
 
 
 -- Creating Window --
-local Window = Compkiller.new({
-	Name = "COMPKILLER",
+local Window = FiveSync.new({
+	Name = "FiveSync",
 	Keybind = "LeftAlt",
-	Logo = "rbxassetid://120245531583106",
-	Scale = Compkiller.Scale.Window, -- Leave blank if you want automatic scale [PC, Mobile].
+	Logo = "rbxassetid://117056629401480",
+	Scale = FiveSync.Scale.Window, -- Leave blank if you want automatic scale [PC, Mobile].
 	TextSize = 15,
 });
 
@@ -72,7 +72,7 @@ Notifier.new({
 	Title = "Notification",
 	Content = "Thank you for use this script!",
 	Duration = 10,
-	Icon = "rbxassetid://120245531583106"
+	Icon = "rbxassetid://117056629401480"
 });
 
 
@@ -88,7 +88,7 @@ Watermark:AddText({
 
 Watermark:AddText({
 	Icon = "clock",
-	Text = Compkiller:GetDate(),
+	Text = FiveSync:GetDate(),
 });
 
 
@@ -100,14 +100,14 @@ local Time = Watermark:AddText({
 
 task.spawn(function()
 	while true do task.wait()
-		Time:SetText(Compkiller:GetTimeNow());
+		Time:SetText(FiveSync:GetTimeNow());
 	end
 end)
 
 
 Watermark:AddText({
 	Icon = "server",
-	Text = Compkiller.Version,
+	Text = FiveSync.Version,
 });
 
 
@@ -437,141 +437,141 @@ Settings:AddToggle({
 
 Settings:AddColorPicker({
 	Name = "Highlight",
-	Default = Compkiller.Colors.Highlight,
+	Default = FiveSync.Colors.Highlight,
 	Callback = function(v)
-		Compkiller.Colors.Highlight = v;
-		Compkiller:RefreshCurrentColor();
+		FiveSync.Colors.Highlight = v;
+		FiveSync:RefreshCurrentColor();
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Toggle Color",
-	Default = Compkiller.Colors.Toggle,
+	Default = FiveSync.Colors.Toggle,
 	Callback = function(v)
-		Compkiller.Colors.Toggle = v;
+		FiveSync.Colors.Toggle = v;
 		
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Drop Color",
-	Default = Compkiller.Colors.DropColor,
+	Default = FiveSync.Colors.DropColor,
 	Callback = function(v)
-		Compkiller.Colors.DropColor = v;
+		FiveSync.Colors.DropColor = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Risky",
-	Default = Compkiller.Colors.Risky,
+	Default = FiveSync.Colors.Risky,
 	Callback = function(v)
-		Compkiller.Colors.Risky = v;
+		FiveSync.Colors.Risky = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Mouse Enter",
-	Default = Compkiller.Colors.MouseEnter,
+	Default = FiveSync.Colors.MouseEnter,
 	Callback = function(v)
-		Compkiller.Colors.MouseEnter = v;
+		FiveSync.Colors.MouseEnter = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Block Color",
-	Default = Compkiller.Colors.BlockColor,
+	Default = FiveSync.Colors.BlockColor,
 	Callback = function(v)
-		Compkiller.Colors.BlockColor = v;
+		FiveSync.Colors.BlockColor = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Background Color",
-	Default = Compkiller.Colors.BGDBColor,
+	Default = FiveSync.Colors.BGDBColor,
 	Callback = function(v)
-		Compkiller.Colors.BGDBColor = v;
+		FiveSync.Colors.BGDBColor = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Block Background Color",
-	Default = Compkiller.Colors.BlockBackground,
+	Default = FiveSync.Colors.BlockBackground,
 	Callback = function(v)
-		Compkiller.Colors.BlockBackground = v;
+		FiveSync.Colors.BlockBackground = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Stroke Color",
-	Default = Compkiller.Colors.StrokeColor,
+	Default = FiveSync.Colors.StrokeColor,
 	Callback = function(v)
-		Compkiller.Colors.StrokeColor = v;
+		FiveSync.Colors.StrokeColor = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "High Stroke Color",
-	Default = Compkiller.Colors.HighStrokeColor,
+	Default = FiveSync.Colors.HighStrokeColor,
 	Callback = function(v)
-		Compkiller.Colors.HighStrokeColor = v;
+		FiveSync.Colors.HighStrokeColor = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Switch Color",
-	Default = Compkiller.Colors.SwitchColor,
+	Default = FiveSync.Colors.SwitchColor,
 	Callback = function(v)
-		Compkiller.Colors.SwitchColor = v;
+		FiveSync.Colors.SwitchColor = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
 
 Settings:AddColorPicker({
 	Name = "Line Color",
-	Default = Compkiller.Colors.LineColor,
+	Default = FiveSync.Colors.LineColor,
 	Callback = function(v)
-		Compkiller.Colors.LineColor = v;
+		FiveSync.Colors.LineColor = v;
 
 
-		Compkiller:RefreshCurrentColor(v);
+		FiveSync:RefreshCurrentColor(v);
 	end,
 });
 
@@ -579,13 +579,13 @@ Settings:AddColorPicker({
 Settings:AddButton({
 	Name = "Get Theme",
 	Callback = function()
-		print(Compkiller:GetTheme())
+		print(FiveSync:GetTheme())
 		
 		Notifier.new({
 			Title = "Notification",
 			Content = "Copied Them Color to your clipboard",
 			Duration = 5,
-			Icon = "rbxassetid://120245531583106"
+			Icon = "rbxassetid://117056629401480"
 		});
 	end,
 });
@@ -604,7 +604,7 @@ ThemeTab:DrawSection({
 		"Skeet"
 	},
 	Callback = function(v)
-		Compkiller:SetTheme(v)
+		FiveSync:SetTheme(v)
 	end,
 })
 
