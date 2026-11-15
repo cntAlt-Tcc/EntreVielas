@@ -1461,6 +1461,293 @@ WSection:AddButton({ Name = "Limpar", Callback = function() getgenv().Aimbot_Whi
 
 refreshW()
 
+-- ==============================================================
+-- Aba Silent Aim (Combat) - reusa a whitelist do Aimbot
+-- ==============================================================
+local SilentAimTab = CombatContainer:DrawTab({
+    Name = "Silent Aim",
+    Type = "Double",
+    EnableScrolling = true,
+});
+
+-- // Configurações Globais
+getgenv().SilentAim_Ativo      = false
+getgenv().SilentAim_TeamCheck  = false
+getgenv().SilentAim_WallCheck  = true
+getgenv().SilentAim_FireFunc   = true
+getgenv().SilentAim_TargetPart = "Head"
+getgenv().SilentAim_FOV        = 150
+getgenv().SilentAim_ShowFOV    = true
+getgenv().SilentAim_HitChance  = 100
+getgenv().SilentAim_Prediction = 0
+
+-- // Métodos ativos (somente um por vez via UI)
+local SA_Methods = {
+    Raycast = true,
+    FindPartOnRay = false,
+    FindPartOnRayWithIgnoreList = false,
+    FindPartOnRayWithWhitelist = false,
+    ViewportPointToRay = false,
+    ScreenPointToRay = false,
+    MouseHit = false,
+}
+
+-- // API do executor
+local SA_GetNamecall = getnamecallmethod
+local SA_CheckCaller = checkcaller
+local SA_HookMeta    = hookmetamethod
+
+-- // Cache do alvo
+local SA_Target, SA_TargetPart, SA_TargetPos = nil, nil, nil
+
+-- // FOV (Drawing.Circle)
+local SA_FOVCircle
+pcall(function()
+    SA_FOVCircle = Drawing.new("Circle")
+    SA_FOVCircle.Thickness, SA_FOVCircle.NumSides = 1.5, 60
+    SA_FOVCircle.Radius, SA_FOVCircle.Filled, SA_FOVCircle.Visible, SA_FOVCircle.Transparency = 150, false, false, 0.85
+end)
+
+RunService.RenderStepped:Connect(function()
+    if not SA_FOVCircle then return end
+    if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowFOV then
+        SA_FOVCircle.Visible  = true
+        SA_FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        SA_FOVCircle.Radius   = getgenv().SilentAim_FOV
+        SA_FOVCircle.Color    = getgenv().Aimbot_FOVColor
+    else
+        SA_FOVCircle.Visible = false
+    end
+end)
+
+-- // Verificação de parede
+local function SA_CheckWall(targetPos, otherChar)
+    if not getgenv().SilentAim_WallCheck then return true end
+    local ok, res = pcall(function()
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { LocalPlayer.Character, otherChar }
+        return workspace:Raycast(Camera.CFrame.Position, targetPos - Camera.CFrame.Position, params)
+    end)
+    return ok and not res
+end
+
+-- // Considera um modelo (player ou NPC) como candidato
+local function SA_ConsiderModel(model, center, best)
+    if model == LocalPlayer.Character then return best end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return best end
+
+    local part = model:FindFirstChild(getgenv().SilentAim_TargetPart) or model:FindFirstChild("HumanoidRootPart")
+    if not part then return best end
+
+    local ok, pos, onScreen = pcall(function() return Camera:WorldToScreenPoint(part.Position) end)
+    if not ok or not onScreen or pos.Z <= 0 then return best end
+
+    local dist = (center - Vector2.new(pos.X, pos.Y)).Magnitude
+    if dist > getgenv().SilentAim_FOV or (best and dist >= best.dist) then return best end
+
+    return { model = model, part = part, pos = part.Position, dist = dist }
+end
+
+-- // Scan de NPCs (cache de 1s)
+local SA_NpcCache = {}
+local SA_LastNpcScan = 0
+local function SA_ScanNPCs()
+    local now = tick()
+    if now - SA_LastNpcScan < 1 then return SA_NpcCache end
+    SA_LastNpcScan = now
+    SA_NpcCache = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= LocalPlayer.Character then
+            local hum = v:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and not Players:GetPlayerFromCharacter(v) then
+                table.insert(SA_NpcCache, v)
+            end
+        end
+    end
+    return SA_NpcCache
+end
+
+-- // Atualiza o alvo (respeita a whitelist do Aimbot)
+local function SA_UpdateTarget()
+    if not getgenv().SilentAim_Ativo or not LocalPlayer.Character then
+        SA_Target, SA_TargetPart, SA_TargetPos = nil, nil, nil
+        return
+    end
+
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local best = nil
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and not getgenv().Aimbot_Whitelist[plr.Name] then
+            if not (getgenv().SilentAim_TeamCheck and plr.Team == LocalPlayer.Team) then
+                local char = plr.Character
+                if char then best = SA_ConsiderModel(char, center, best) end
+            end
+        end
+    end
+
+    for _, model in ipairs(SA_ScanNPCs()) do
+        best = SA_ConsiderModel(model, center, best)
+    end
+
+    if best and not SA_CheckWall(best.pos, best.model) then best = nil end
+
+    if best then
+        SA_Target, SA_TargetPart = best.model, best.part
+        local p = best.pos
+        if getgenv().SilentAim_Prediction > 0 and best.part:IsA("BasePart") then
+            p = p + (best.part.AssemblyLinearVelocity or Vector3.zero) * getgenv().SilentAim_Prediction
+        end
+        SA_TargetPos = p
+    else
+        SA_Target, SA_TargetPart, SA_TargetPos = nil, nil, nil
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        pcall(SA_UpdateTarget)
+    end
+end)
+
+-- // Helpers
+local function SA_PassChance()
+    local chance = getgenv().SilentAim_HitChance
+    if chance >= 100 then return true end
+    return math.random(1, 100) <= chance
+end
+
+local SA_FireKeywords = {
+    "bullet", "gun", "fire", "shoot", "weapon", "projectile",
+    "shot", "raycast", "trace", "attack", "aim", "combat", "blaster"
+}
+local function SA_IsFireFunc()
+    if not getgenv().SilentAim_FireFunc then return true end
+    local tb = debug.traceback():lower()
+    for _, kw in ipairs(SA_FireKeywords) do
+        if tb:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+local function SA_CanRun()
+    if not getgenv().SilentAim_Ativo or SA_TargetPos == nil then return false end
+    if SA_CheckCaller and SA_CheckCaller() then return false end
+    if not SA_PassChance() then return false end
+    return SA_IsFireFunc()
+end
+
+-- // Hook __namecall
+if SA_HookMeta then
+    local SA_OldNamecall
+    SA_OldNamecall = SA_HookMeta(game, "__namecall", function(...)
+        local method = SA_GetNamecall and SA_GetNamecall()
+        if not SA_CanRun() then return SA_OldNamecall(...) end
+
+        local self = select(1, ...)
+
+        if method == "Raycast" and SA_Methods.Raycast and self == workspace then
+            local args = {...}
+            args[3] = (SA_TargetPos - args[2]).Unit * 1000
+            return SA_OldNamecall(unpack(args))
+        end
+
+        if self == workspace then
+            if (method == "FindPartOnRay" or method == "findPartOnRay") and SA_Methods.FindPartOnRay then
+                local args = {...}
+                local ray = args[2]
+                if typeof(ray) == "Ray" then
+                    args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                    return SA_OldNamecall(unpack(args))
+                end
+            end
+            if method == "FindPartOnRayWithIgnoreList" and SA_Methods.FindPartOnRayWithIgnoreList then
+                local args = {...}
+                local ray = args[2]
+                if typeof(ray) == "Ray" then
+                    args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                    return SA_OldNamecall(unpack(args))
+                end
+            end
+            if method == "FindPartOnRayWithWhitelist" and SA_Methods.FindPartOnRayWithWhitelist then
+                local args = {...}
+                local ray = args[2]
+                if typeof(ray) == "Ray" then
+                    args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                    return SA_OldNamecall(unpack(args))
+                end
+            end
+        end
+
+        if self == Camera then
+            if method == "ViewportPointToRay" and SA_Methods.ViewportPointToRay then
+                local origin = Camera.CFrame.Position
+                return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+            end
+            if method == "ScreenPointToRay" and SA_Methods.ScreenPointToRay then
+                local origin = Camera.CFrame.Position
+                return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+            end
+        end
+
+        return SA_OldNamecall(...)
+    end)
+
+    -- // Hook __index (Mouse.Hit legado)
+    local SA_OldIndex
+    SA_OldIndex = SA_HookMeta(game, "__index", function(t, k)
+        if SA_CanRun() and typeof(t) == "Instance" and t:IsA("Mouse") then
+            if k == "Hit" and SA_Methods.MouseHit then
+                return CFrame.new(SA_TargetPos)
+            elseif k == "Target" and SA_Methods.MouseHit then
+                return SA_TargetPart
+            elseif (k == "X" or k == "Y") and SA_Methods.MouseHit then
+                local p = Camera:WorldToScreenPoint(SA_TargetPos)
+                return p[k]
+            elseif k == "UnitRay" and SA_Methods.MouseHit then
+                local origin = SA_OldIndex(t, "UnitRay").Origin
+                return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+            end
+        end
+        return SA_OldIndex(t, k)
+    end)
+end
+
+-- // UI
+local SAConfig = SilentAimTab:DrawSection({ Name = "Configurações", Position = 'left' });
+local SAVisual = SilentAimTab:DrawSection({ Name = "Visual", Position = 'right' });
+
+SAConfig:AddToggle({ Name = "Ativar Silent Aim", Default = false, Callback = function(v) getgenv().SilentAim_Ativo = v end });
+SAConfig:AddToggle({ Name = "Team Check", Default = false, Callback = function(v) getgenv().SilentAim_TeamCheck = v end });
+SAConfig:AddToggle({ Name = "Wall Check", Default = true, Callback = function(v) getgenv().SilentAim_WallCheck = v end });
+SAConfig:AddToggle({ Name = "Fire Func Check", Default = true, Callback = function(v) getgenv().SilentAim_FireFunc = v end });
+SAConfig:AddDropdown({
+    Name = "Parte do Alvo",
+    Default = "Head",
+    Values = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
+    Callback = function(v) getgenv().SilentAim_TargetPart = v end
+});
+SAConfig:AddSlider({ Name = "FOV Radius", Min = 20, Max = 500, Default = 150, Callback = function(v) getgenv().SilentAim_FOV = v end });
+SAConfig:AddSlider({ Name = "Hit Chance", Min = 1, Max = 100, Default = 100, Callback = function(v) getgenv().SilentAim_HitChance = v end });
+SAConfig:AddSlider({ Name = "Predição", Min = 0, Max = 0.5, Default = 0, Round = 2, Callback = function(v) getgenv().SilentAim_Prediction = v end });
+
+SAVisual:AddToggle({ Name = "Mostrar FOV", Default = true, Callback = function(v) getgenv().SilentAim_ShowFOV = v end });
+SAVisual:AddDropdown({
+    Name = "Método",
+    Default = "Raycast",
+    Values = {"Raycast", "FindPartOnRay", "FindPartOnRayWithIgnoreList", "FindPartOnRayWithWhitelist", "ViewportPointToRay", "ScreenPointToRay", "MouseHit"},
+    Callback = function(v)
+        for k in pairs(SA_Methods) do SA_Methods[k] = false end
+        SA_Methods[v] = true
+    end
+});
+SAVisual:AddParagraph({ Title = "Métodos seguros:", Content = "Raycast, FindPartOnRay*" });
+SAVisual:AddParagraph({ Title = "Métodos arriscados:", Content = "ViewportPointToRay, ScreenPointToRay, Mouse.Hit" });
+
+
 
 
 local HitboxTab = CombatContainer:DrawTab({
@@ -1864,7 +2151,8 @@ local Config = {
     RefreshRate = 0, -- 0 para máximo FPS
     
     Box = { Enabled = false, Type = "Full", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1, Outline = true,
-            Fill = false, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.6 },
+            Fill = false, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.6,
+            Gradient = false, GradientColor = Color3.fromRGB(0, 0, 255), GradientTransparency = 0.0 },
     Tracer = { Enabled = false, Origin = "Bottom", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1 },
     Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1 },
     Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1 },
@@ -1903,6 +2191,9 @@ local function ClearESP(player)
                 for _, line in pairs(data.Box) do line.Visible = false; line:Remove() end
             end
             if data.BoxFill then data.BoxFill.Visible = false; data.BoxFill:Remove() end
+            if data.BoxGradient then
+                for _, g in pairs(data.BoxGradient) do g.Visible = false; g:Remove() end
+            end
             -- Remove Tracer
             if data.Tracer then data.Tracer.Visible = false; data.Tracer:Remove() end
             -- Remove Textos
@@ -1933,6 +2224,7 @@ local function InitPlayerESP(player)
     -- Criar 8 linhas para suportar tanto Full quanto Corner
     for i = 1, 8 do data.Box["Line"..i] = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1}) end
     data.BoxFill = CreateDrawing("Square", {Filled = true, Visible = false, Transparency = 1})
+    data.BoxGradient = {}
     data.Tracer = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1})
     data.Name = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
     data.Distance = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
@@ -1964,6 +2256,7 @@ RunService.RenderStepped:Connect(function()
             pcall(function()
                 for _, v in pairs(data.Box) do v.Visible = false end
                 if data.BoxFill then data.BoxFill.Visible = false end
+                if data.BoxGradient then for _, g in pairs(data.BoxGradient) do g.Visible = false end end
                 data.Tracer.Visible = false
                 data.Name.Visible = false
                 data.Distance.Visible = false
@@ -2031,6 +2324,26 @@ RunService.RenderStepped:Connect(function()
                         else
                             data.BoxFill.Visible = false
                         end
+                        if Config.Box.Fill and Config.Box.Gradient then
+                            local gColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.GradientColor
+                            local steps = 24
+                            local stepH = height / steps
+                            local gTop = Config.Box.GradientTransparency
+                            local gBot = 1
+                            data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, gTop, true
+                            for s = 1, steps do
+                                local st = (s - 1) / (steps - 1)
+                                local g = data.BoxGradient["Step"..s]
+                                if not g then g = CreateDrawing("Square", {Filled = true, Visible = false}); data.BoxGradient["Step"..s] = g end
+                                g.Position = Vector2.new(x, y + (s - 1) * stepH)
+                                g.Size = Vector2.new(width, stepH + 1)
+                                g.Color = fillColor:Lerp(gColor, st)
+                                g.Transparency = gTop + (gBot - gTop) * st
+                                g.Visible = true
+                            end
+                        else
+                            for _, g in pairs(data.BoxGradient) do g.Visible = false end
+                        end
                     else -- Corner
                         local cl = width / 4
                         data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + cl, y)
@@ -2046,10 +2359,12 @@ RunService.RenderStepped:Connect(function()
                             l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency 
                         end
                         data.BoxFill.Visible = false
+                        for _, g in pairs(data.BoxGradient) do g.Visible = false end
                     end
                 else
                     for i=1, 8 do data.Box["Line"..i].Visible = false end
                     data.BoxFill.Visible = false
+                    for _, g in pairs(data.BoxGradient) do g.Visible = false end
                 end
 
                 -- Tracer Render
@@ -2115,6 +2430,7 @@ RunService.RenderStepped:Connect(function()
                 -- Fora da tela ou distância
                 for _, v in pairs(data.Box) do v.Visible = false end
                 data.BoxFill.Visible = false
+                for _, g in pairs(data.BoxGradient) do g.Visible = false end
                 data.Tracer.Visible, data.Name.Visible, data.Distance.Visible, data.Item.Visible, data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthText.Visible = false, false, false, false, false, false, false
                 for _, v in pairs(data.Skeleton) do v.Visible = false end
             end
@@ -2145,6 +2461,8 @@ SecBox:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback 
 SecBox:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Box.Transparency = v end });
 SecBox:AddToggle({ Name = "Preencher Box", Default = false, Callback = function(v) Config.Box.Fill = v end }).Link:AddColorPicker({ Default = Config.Box.FillColor, Callback = function(v) Config.Box.FillColor = v end });
 SecBox:AddSlider({ Name = "Transp. Preenchimento", Min = 0, Max = 1, Default = 0.6, Round = 2, Callback = function(v) Config.Box.FillTransparency = v end });
+SecBox:AddToggle({ Name = "Gradiente", Default = false, Callback = function(v) Config.Box.Gradient = v end }).Link:AddColorPicker({ Default = Config.Box.GradientColor, Callback = function(v) Config.Box.GradientColor = v end });
+SecBox:AddSlider({ Name = "Transp. Gradiente", Min = 0, Max = 1, Default = 0, Round = 2, Callback = function(v) Config.Box.GradientTransparency = v end });
 
 -- Seção Tracers
 local SecTracer = Tab:DrawSection({ Name = "Tracers", Position = 'left' });
@@ -2424,6 +2742,98 @@ CameraSection:AddSlider({
         NotifyCam("Zoom: "..MaxZoom)
     end
 })
+
+-- ==============================================================
+-- Seção Motion Blur (aba Mundo) - desfoque dinâmico pela velocidade da câmera
+-- ==============================================================
+local MotionBlurSection = WorldTab:DrawSection({
+    Name = "Motion Blur",
+    Position = "left"
+})
+
+local MB_Camera = workspace.CurrentCamera
+local MB_Amount = 15        --Select your amount--
+local MB_Amplifier = 5      --If you know yk--
+local MB_Last = MB_Camera and MB_Camera.CFrame.LookVector or nil
+local MB_Effect = nil
+local MB_Enabled = false
+
+local function MB_Ensure()
+    if not MB_Camera then return nil end
+    if not MB_Effect or not MB_Effect.Parent then
+        MB_Effect = Instance.new("BlurEffect", MB_Camera)
+        MB_Effect.Name = "E34x_MotionBlur"
+    end
+    return MB_Effect
+end
+
+local function MB_SetState(state)
+    MB_Enabled = state
+    if state then
+        if MB_Camera then MB_Last = MB_Camera.CFrame.LookVector end
+        MB_Ensure()
+    elseif MB_Effect then
+        MB_Effect:Destroy()
+        MB_Effect = nil
+    end
+end
+
+workspace.Changed:Connect(function(property)
+    if property == "CurrentCamera" then
+        MB_Camera = workspace.CurrentCamera
+        MB_Last = MB_Camera and MB_Camera.CFrame.LookVector or nil
+        if MB_Effect then MB_Effect:Destroy(); MB_Effect = nil end
+        if MB_Enabled then MB_Ensure() end
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if not MB_Enabled or not MB_Camera or not MB_Last then return end
+    local blur = MB_Ensure()
+    if not blur then return end
+    local magnitude = (MB_Camera.CFrame.LookVector - MB_Last).Magnitude
+    blur.Size = math.clamp(math.abs(magnitude) * MB_Amount * MB_Amplifier / 2, 0, 56)
+    MB_Last = MB_Camera.CFrame.LookVector
+end)
+
+MotionBlurSection:AddParagraph({
+    Title = "Motion Blur",
+    Content = "Desfoque dinâmico baseado na velocidade de rotação da câmera."
+})
+
+MotionBlurSection:AddToggle({
+    Name = "Ativar Motion Blur",
+    Default = false,
+    Flag = "Visual_MotionBlur",
+    Callback = function(v)
+        MB_SetState(v)
+        Notifier.new({
+            Title = "Motion Blur",
+            Content = v and "Ativado" or "Desativado",
+            Duration = 1.5,
+            Icon = "rbxassetid://117056629401480"
+        })
+    end
+})
+
+MotionBlurSection:AddSlider({
+    Name = "Intensidade",
+    Min = 0,
+    Max = 100,
+    Default = MB_Amount,
+    Flag = "Visual_MotionBlurAmount",
+    Callback = function(v) MB_Amount = v end
+})
+
+MotionBlurSection:AddSlider({
+    Name = "Amplificador",
+    Min = 1,
+    Max = 20,
+    Default = MB_Amplifier,
+    Flag = "Visual_MotionBlurAmp",
+    Callback = function(v) MB_Amplifier = v end
+})
+
 
 -- ==============================================================
 -- Aba Misc: Settings (UI) e Temas (nomes/ícones/cores do exemplo)
