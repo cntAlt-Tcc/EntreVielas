@@ -40,6 +40,8 @@ chmod +x /tmp/luaubin/*
 - **`AddToggle` returns an API table** (`SetValue` / `GetValue` / `SetText` / `GetText`), plus `Args.Link` for `AddKeybind` / `AddHelper` / `AddOption`. There is no `:Toggle()` method on the returned object.
 - **`SetTheme` overwrites the whole palette**, so a config load can revert custom colors. `FiveSync.Colors` is the single source of truth.
 - **Elements are only saved to config when they have a `Flag`.** Elements without a `Flag` are runtime-only.
+- **Luau caps locals at 200 per function/chunk.** A long top-level script can exceed this and fail with `Out of local registers when trying to allocate X: exceeded limit 200` (the executor compiles with optimization off, so it *does* enforce the limit even when a local `luau-compile` passes). Fix by wrapping self-contained groups of statements in `do ... end` blocks so their locals are released at the block end. Reproduce locally with `luau-compile --binary -O0 Script/A`.
+- **The executor truncates pasted text at ~64000 characters.** Pasting a big script inline fails with an EOF parse error mid-table (`Expected '}' ... got <eof>`). Load it by URL instead: `loadstring(game:HttpGet(".../Script/A"))()`.
 
 ## Workflow
 

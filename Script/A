@@ -152,6 +152,7 @@ local PlayerContainer = Window:DrawContainerTab({
 	Name = "| Player",
 	Icon = "user",
 });
+do -- escopo local (limite de 200 registradores)
 local MovementTab = PlayerContainer:DrawTab({
     Name = " Movimentação  ",
     Type = "Double"
@@ -1012,7 +1013,9 @@ SkySection:AddToggle({
 })
 
 -- Noclip
+end
 
+do -- escopo local (limite de 200 registradores)
 local TargetTab = PlayerContainer:DrawTab({
 	Name = " Alvo  ",
 	Type = "Single",
@@ -1184,6 +1187,7 @@ NoclipSection:AddDropdown({
 === Combat Tab ===
 
 ]]--
+end
 
 local CombatContainer = Window:DrawContainerTab({
 	Name = "| Combat",
@@ -1464,6 +1468,7 @@ refreshW()
 -- ==============================================================
 -- Aba Silent Aim (Combat) - reusa a whitelist do Aimbot
 -- ==============================================================
+do -- escopo local (limite de 200 registradores)
 local SilentAimTab = CombatContainer:DrawTab({
     Name = "Silent Aim",
     Type = "Double",
@@ -1746,10 +1751,12 @@ SAVisual:AddDropdown({
 });
 SAVisual:AddParagraph({ Title = "Métodos seguros:", Content = "Raycast, FindPartOnRay*" });
 SAVisual:AddParagraph({ Title = "Métodos arriscados:", Content = "ViewportPointToRay, ScreenPointToRay, Mouse.Hit" });
+end
 
 
 
 
+do -- escopo local (limite de 200 registradores)
 local HitboxTab = CombatContainer:DrawTab({
 	Name = " Hitbox  ",
 	Type = "Double"
@@ -2096,6 +2103,8 @@ hitboxDecreaseButton.Visible = false
 
 
 
+end
+do -- escopo local (limite de 200 registradores)
 local MagneticAimTab = CombatContainer:DrawTab({
 	Name = " Magnetic Aim  ",
 	Type = "Double"
@@ -2128,6 +2137,7 @@ local NpcMagnetTab = CombatNPCContainer:DrawTab({
 Visual Tab
     
 ]]
+end
 
 local VisualContainer = Window:DrawContainerTab({
 	Name = "| Visual",
