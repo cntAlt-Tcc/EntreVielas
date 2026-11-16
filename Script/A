@@ -1381,6 +1381,7 @@ local function Aimbot_Render(dt)
 
     if getgenv().Aimbot_Ativo then
         local Target = GetClosestPlayer()
+        getgenv().Aimbot_CurrentPart = Target
         if Target then
             local aimPos = Target.Position
             if Target.Parent:FindFirstChild("HumanoidRootPart") then
@@ -1629,6 +1630,7 @@ end
 local function SA_UpdateTarget()
     if not getgenv().SilentAim_Ativo or not LocalPlayer.Character then
         SA_TargetPart, SA_TargetPos = nil, nil
+        getgenv().SilentAim_CurrentPart = nil
         return
     end
 
@@ -1654,6 +1656,7 @@ local function SA_UpdateTarget()
 
     if best then
         SA_TargetPart = best.part
+        getgenv().SilentAim_CurrentPart = best.part
         local p = best.pos
         if getgenv().SilentAim_Prediction > 0 and best.part:IsA("BasePart") then
             p = p + (best.part.AssemblyLinearVelocity or Vector3.new(0, 0, 0)) * getgenv().SilentAim_Prediction
@@ -1661,6 +1664,7 @@ local function SA_UpdateTarget()
         SA_TargetPos = p
     else
         SA_TargetPart, SA_TargetPos = nil, nil
+        getgenv().SilentAim_CurrentPart = nil
     end
 end
 
@@ -1691,11 +1695,13 @@ local function SA_IsFireFunc()
     return false
 end
 
+-- // Checagem barata (chamada a cada namecall/index). O teste caro de
+-- "fire func" (debug.traceback) NÃO fica aqui: só roda depois de a chamada
+-- casar com um método/alvo, senão cada :Metodo() do jogo pagaria o traceback.
 local function SA_CanRun()
     if not getgenv().SilentAim_Ativo or SA_TargetPos == nil then return false end
     if SA_CheckCaller and SA_CheckCaller() then return false end
-    if not SA_ChanceOK then return false end
-    return SA_IsFireFunc()
+    return SA_ChanceOK
 end
 
 -- // Validação de argumentos (evita corromper chamadas não relacionadas)
@@ -1737,7 +1743,7 @@ local function SA_NamecallHook(...)
 
     -- Raycast: args[2]=origem (Vector3), args[3]=direção
     if self == workspace and method == "Raycast" and SA_Methods.Raycast then
-        if SA_ValidateArgs(args, "Raycast") then
+        if SA_ValidateArgs(args, "Raycast") and SA_IsFireFunc() then
             local origin = args[2]
             if typeof(origin) == "Vector3" then
                 args[3] = SA_Direction(origin, SA_TargetPos)
@@ -1752,7 +1758,7 @@ local function SA_NamecallHook(...)
         local name = method
         if name == "findPartOnRay" then name = "FindPartOnRay" end
         if typeof(ray) == "Ray" and SA_Methods[name] then
-            if SA_ValidateArgs(args, name) then
+            if SA_ValidateArgs(args, name) and SA_IsFireFunc() then
                 args[2] = Ray.new(ray.Origin, SA_Direction(ray.Origin, SA_TargetPos))
                 return SA_OldNamecall(unpack(args))
             end
@@ -1762,12 +1768,16 @@ local function SA_NamecallHook(...)
     -- Camera: ViewportPointToRay / ScreenPointToRay devolvem um Ray
     if self == Camera then
         if method == "ViewportPointToRay" and SA_Methods.ViewportPointToRay then
-            local origin = Camera.CFrame.Position
-            return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
+            if SA_IsFireFunc() then
+                local origin = Camera.CFrame.Position
+                return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
+            end
         end
         if method == "ScreenPointToRay" and SA_Methods.ScreenPointToRay then
-            local origin = Camera.CFrame.Position
-            return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
+            if SA_IsFireFunc() then
+                local origin = Camera.CFrame.Position
+                return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
+            end
         end
     end
 
@@ -1776,14 +1786,14 @@ end
 
 local function SA_IndexHook(t, k)
     if SA_CanRun() and typeof(t) == "Instance" and t:IsA("Mouse") then
-        if k == "Hit" and SA_Methods.MouseHit then
+        if k == "Hit" and SA_Methods.MouseHit and SA_IsFireFunc() then
             return CFrame.new(SA_TargetPos)
-        elseif k == "Target" and SA_Methods.MouseHit then
+        elseif k == "Target" and SA_Methods.MouseHit and SA_IsFireFunc() then
             return SA_TargetPart
-        elseif (k == "X" or k == "Y") and SA_Methods.MouseHit then
+        elseif (k == "X" or k == "Y") and SA_Methods.MouseHit and SA_IsFireFunc() then
             local p = Camera:WorldToScreenPoint(SA_TargetPos)
             return p[k]
-        elseif k == "UnitRay" and SA_Methods.MouseHit then
+        elseif k == "UnitRay" and SA_Methods.MouseHit and SA_IsFireFunc() then
             local origin = SA_OldIndex(t, "UnitRay").Origin
             return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
         end
@@ -2274,7 +2284,8 @@ local Config = {
     Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1 },
     Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1 },
     Skeleton = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1 },
-    Rainbow = { Enabled = false, Speed = 0.05, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true, ApplyToSkeleton = true }
+    FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela" },
+    Rainbow = { Enabled = false, Speed = 0.05, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true, ApplyToSkeleton = true, ApplyToFOVLine = true }
 }
 
 local ESP_Cache = {}
@@ -2366,6 +2377,50 @@ local function ESP_Cleanup()
 end
 -- Loop de Renderização (conectado apenas quando o ESP está ativo)
 local ESP_RenderConn = nil
+
+-- // FOV Line: linha do centro da tela até o alvo atual do Silent Aim / Aimbot
+local FOVLineDraw = CreateDrawing("Line", {Thickness = 1, Transparency = 1, Visible = false})
+local FOVLineFrom = nil
+local function GetFOVLineOrigin()
+    local o = Config.FOVLine.Origin
+    if o == "Mouse" then return UserInputService:GetMouseLocation() end
+    if o == "Baixo" then return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y) end
+    if o == "Cima" then return Vector2.new(Camera.ViewportSize.X / 2, 0) end
+    return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2) -- "Tela" (centro)
+end
+local function ESP_RenderFOVLine(rainbowColor)
+    if not Config.FOVLine.Enabled then
+        FOVLineDraw.Visible = false
+        FOVLineFrom = nil
+        return
+    end
+
+    -- Alvo: usa o do Silent Aim e/ou o do Aimbot conforme o modo
+    local part
+    if Config.FOVLine.Mode == "Silent Aim" then
+        part = getgenv().SilentAim_CurrentPart
+    elseif Config.FOVLine.Mode == "Aimbot" then
+        part = getgenv().Aimbot_CurrentPart
+    else
+        part = getgenv().SilentAim_CurrentPart or getgenv().Aimbot_CurrentPart
+    end
+
+    -- Só mostra quando um alvo é definido; mantém o último ponto se a parte sumir
+    if part and part.Parent then FOVLineFrom = part.Position end
+    if not FOVLineFrom then FOVLineDraw.Visible = false; return end
+
+    local pos, onScreen = Camera:WorldToViewportPoint(FOVLineFrom)
+    if not onScreen or pos.Z <= 0 then FOVLineDraw.Visible = false; return end
+
+    local origin = GetFOVLineOrigin()
+    FOVLineDraw.From = origin
+    FOVLineDraw.To = Vector2.new(pos.X, pos.Y)
+    FOVLineDraw.Color = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToFOVLine) and rainbowColor or Config.FOVLine.Color
+    FOVLineDraw.Thickness = Config.FOVLine.Thickness
+    FOVLineDraw.Transparency = Config.FOVLine.Transparency
+    FOVLineDraw.Visible = true
+end
+
 local function ESP_HideAll()
     for _, data in pairs(ESP_Cache) do
         pcall(function()
@@ -2387,10 +2442,22 @@ local function ESP_Render()
     if Config.Rainbow.Enabled then rainbowHue = (rainbowHue + Config.Rainbow.Speed) % 1 end
     local rainbowColor = Color3.fromHSV(rainbowHue, 1, 1)
 
-    if not Config.Enabled then
+    if not Config.Enabled and not Config.FOVLine.Enabled then
         ESP_HideAll()
+        FOVLineDraw.Visible = false
+        FOVLineFrom = nil
         return
     end
+
+    -- // FOV Line (independe de haver players com ESP)
+    if Config.FOVLine.Enabled then
+        ESP_RenderFOVLine(rainbowColor)
+    else
+        FOVLineDraw.Visible = false
+        FOVLineFrom = nil
+    end
+
+    if not Config.Enabled then return end
 
     for _, player in ipairs(Players:GetPlayers()) do
         -- Ignorar Self se configurado
@@ -2560,14 +2627,20 @@ local function ESP_Render()
     end
 end
 
-local function ESP_SetEnabled(state)
-    Config.Enabled = state
-    if state then
+-- Conecta/desconecta o loop conforme ESP e/ou FOV Line estejam ativos
+local function ESP_UpdateLoop()
+    local want = Config.Enabled or Config.FOVLine.Enabled
+    if want then
         if not ESP_RenderConn then
             ESP_RenderConn = RunService.RenderStepped:Connect(ESP_Render)
         end
-        if not ESP_CleanConn then
-            ESP_CleanConn = RunService.Heartbeat:Connect(ESP_Cleanup)
+        if Config.Enabled then
+            if not ESP_CleanConn then
+                ESP_CleanConn = RunService.Heartbeat:Connect(ESP_Cleanup)
+            end
+        elseif ESP_CleanConn then
+            ESP_CleanConn:Disconnect()
+            ESP_CleanConn = nil
         end
     else
         if ESP_RenderConn then
@@ -2579,7 +2652,20 @@ local function ESP_SetEnabled(state)
             ESP_CleanConn = nil
         end
         ESP_HideAll()
+        FOVLineDraw.Visible = false
+        FOVLineFrom = nil
     end
+end
+
+local function ESP_SetEnabled(state)
+    Config.Enabled = state
+    if not state then ESP_HideAll() end
+    ESP_UpdateLoop()
+end
+
+local function FOVLine_SetEnabled(state)
+    Config.FOVLine.Enabled = state
+    ESP_UpdateLoop()
 end
 
 local Tab = VisualContainer:DrawTab({
@@ -2615,6 +2701,14 @@ SecTracer:AddDropdown({ Name = "Origem", Default = "Bottom", Values = {"Top", "B
 SecTracer:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Tracer.Thickness = v end });
 SecTracer:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Tracer.Transparency = v end });
 
+-- Seção FOV Line (linha do centro da tela até o alvo do Silent Aim/Aimbot)
+local SecFOVLine = Tab:DrawSection({ Name = "FOV Line", Position = 'right' });
+SecFOVLine:AddToggle({ Name = "Ativar FOV Line", Callback = FOVLine_SetEnabled }).Link:AddColorPicker({ Default = Config.FOVLine.Color, Callback = function(v) Config.FOVLine.Color = v end });
+SecFOVLine:AddDropdown({ Name = "Alvo", Default = "Ambos", Values = {"Ambos", "Silent Aim", "Aimbot"}, Callback = function(v) Config.FOVLine.Mode = v end });
+SecFOVLine:AddDropdown({ Name = "Origem", Default = "Tela", Values = {"Tela", "Mouse", "Baixo", "Cima"}, Callback = function(v) Config.FOVLine.Origin = v end });
+SecFOVLine:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.FOVLine.Thickness = v end });
+SecFOVLine:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.FOVLine.Transparency = v end });
+
 -- Seção Info
 local SecInfo = Tab:DrawSection({ Name = "Informações & Vida", Position = 'right' });
 SecInfo:AddToggle({ Name = "Mostrar Vida", Callback = function(v) Config.Life.Enabled = v end });
@@ -2639,6 +2733,7 @@ SecRGB:AddToggle({ Name = "RGB na Box", Default = true, Callback = function(v) C
 SecRGB:AddToggle({ Name = "RGB no Tracer", Default = true, Callback = function(v) Config.Rainbow.ApplyToTracer = v end });
 SecRGB:AddToggle({ Name = "RGB no Texto", Default = true, Callback = function(v) Config.Rainbow.ApplyToText = v end });
 SecRGB:AddToggle({ Name = "RGB no Esqueleto", Default = true, Callback = function(v) Config.Rainbow.ApplyToSkeleton = v end });
+SecRGB:AddToggle({ Name = "RGB na FOV Line", Default = true, Callback = function(v) Config.Rainbow.ApplyToFOVLine = v end });
 
 
 
