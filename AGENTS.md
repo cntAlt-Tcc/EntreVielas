@@ -42,6 +42,8 @@ chmod +x /tmp/luaubin/*
 - **Elements are only saved to config when they have a `Flag`.** Elements without a `Flag` are runtime-only.
 - **Luau caps locals at 200 per function/chunk.** A long top-level script can exceed this and fail with `Out of local registers when trying to allocate X: exceeded limit 200` (the executor compiles with optimization off, so it *does* enforce the limit even when a local `luau-compile` passes). Fix by wrapping self-contained groups of statements in `do ... end` blocks so their locals are released at the block end. Reproduce locally with `luau-compile --binary -O0 Script/A`.
 - **The executor truncates pasted text at ~64000 characters.** Pasting a big script inline fails with an EOF parse error mid-table (`Expected '}' ... got <eof>`). Load it by URL instead: `loadstring(game:HttpGet(".../Script/A"))()`.
+- **Always-on loops cost FPS even when their feature is off.** `Script/A` used to `Connect` every feature's `RenderStepped`/`Heartbeat` loop at load and bail out inside the callback. Connect the loop only when the feature's toggle turns on and `Disconnect` when it turns off (see `Aimbot_SetActive`, `SA_SetActive`, `ESP_SetEnabled`, `MB_SetState`). The toggle `Callback` runs once at load with the `Default`, so wiring it to a setter keeps initial state correct.
+- **Local runtime harness.** `/tmp/mock/roblox_mock.lua` is a fake Roblox env (services, players, Drawing, vector math, capture of RunService connections) built by `/tmp/mock/patch_mock.py`; `/tmp/mock/harness.py` loads mock + `inject.lua` + `Script/A` into one env. Run `/tmp/mock/dbg.py` then `/tmp/luaubin/luau dbg.lua` to execute the script end to end. `/tmp` is wiped between sessions, so rebuild it.
 
 ## Workflow
 

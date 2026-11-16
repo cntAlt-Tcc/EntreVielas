@@ -88,12 +88,7 @@ local WlcT = Window:DrawTab({
 local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
-local LocalPlayer = Players.LocalPlayer
-local camera = workspace.CurrentCamera
 local Player = Players.LocalPlayer
-local TweenService = game:GetService("TweenService")
-local CoreGui = game:GetService("CoreGui")
 local localPlayer = Players.LocalPlayer   -- <-- variável usada pelas funções da hitbox
 --[[
     
@@ -1016,7 +1011,7 @@ SkySection:AddToggle({
 end
 
 do -- escopo local (limite de 200 registradores)
-local TargetTab = PlayerContainer:DrawTab({
+PlayerContainer:DrawTab({
 	Name = " Alvo  ",
 	Type = "Single",
 	EnableScrolling = true,
@@ -1206,7 +1201,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer or Players.LocalPlayerAdded:Wait()
 local Camera = workspace.CurrentCamera
-local UIS = game:GetService("UserInputService")
 
 
 -- // Configurações Globais
@@ -1336,9 +1330,10 @@ local function GetClosestPlayer()
     return Target
 end
 
--- // Loop Principal
+-- // Loop Principal (conectado apenas quando o Aimbot está ativo)
 local Hue = 0
-RunService.RenderStepped:Connect(function(dt)
+local Aimbot_Conn = nil
+local function Aimbot_Render(dt)
     local active = getgenv().Aimbot_Ativo and getgenv().Aimbot_FOVStyle ~= "Nenhum"
     FOVFrame.Visible = active
     
@@ -1372,8 +1367,6 @@ RunService.RenderStepped:Connect(function(dt)
             if #fovDrawingLines == 0 then
                 fovDrawingLines = CreateTracedLines(getgenv().Aimbot_FOV, Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2), FOVStroke.Color, trans, FOVStroke.Thickness)
             else
-                local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-                local half = getgenv().Aimbot_FOV
                 -- Atualiza posições e cores das linhas
                 local color = FOVStroke.Color
                 for _, l in ipairs(fovDrawingLines) do
@@ -1402,7 +1395,23 @@ RunService.RenderStepped:Connect(function(dt)
             end
         end
     end
-end)
+end
+
+local function Aimbot_SetActive(state)
+    getgenv().Aimbot_Ativo = state
+    if state then
+        if not Aimbot_Conn then
+            Aimbot_Conn = RunService.RenderStepped:Connect(Aimbot_Render)
+        end
+    else
+        if Aimbot_Conn then
+            Aimbot_Conn:Disconnect()
+            Aimbot_Conn = nil
+        end
+        FOVFrame.Visible = false
+        ClearTracedLines()
+    end
+end
 
 -- // UI
 
@@ -1412,7 +1421,7 @@ end)
 local Section = AimbotTab:DrawSection({ Name = "Configurações", Position = 'left' });
 local Visual = AimbotTab:DrawSection({ Name = "Visual FOV", Position = 'right' });
 
-Section:AddToggle({ Name = "Ativar Aimbot", Default = false, Callback = function(v) getgenv().Aimbot_Ativo = v end });
+Section:AddToggle({ Name = "Ativar Aimbot", Default = false, Callback = Aimbot_SetActive });
 Section:AddDropdown({ Name = "Método", Default = "Humanizado", Values = {"Aimbot Puro", "Humanizado"}, Callback = function(v) getgenv().Aimbot_Metodo = v end });
 Section:AddDropdown({ 
     Name = "Parte do Alvo", 
@@ -1503,7 +1512,7 @@ local SA_CheckCaller = checkcaller
 local SA_HookMeta    = hookmetamethod
 
 -- // Cache do alvo
-local SA_Target, SA_TargetPart, SA_TargetPos = nil, nil, nil
+local SA_TargetPart, SA_TargetPos = nil, nil
 
 -- // FOV (Drawing.Circle)
 local SA_FOVCircle
@@ -1513,7 +1522,8 @@ pcall(function()
     SA_FOVCircle.Radius, SA_FOVCircle.Filled, SA_FOVCircle.Visible, SA_FOVCircle.Transparency = 150, false, false, 0.85
 end)
 
-RunService.RenderStepped:Connect(function()
+local SA_FOVConn = nil
+local function SA_FOVRender()
     if not SA_FOVCircle then return end
     if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowFOV then
         SA_FOVCircle.Visible  = true
@@ -1523,7 +1533,7 @@ RunService.RenderStepped:Connect(function()
     else
         SA_FOVCircle.Visible = false
     end
-end)
+end
 
 -- // Verificação de parede
 local function SA_CheckWall(targetPos, otherChar)
@@ -1577,7 +1587,7 @@ end
 -- // Atualiza o alvo (respeita a whitelist do Aimbot)
 local function SA_UpdateTarget()
     if not getgenv().SilentAim_Ativo or not LocalPlayer.Character then
-        SA_Target, SA_TargetPart, SA_TargetPos = nil, nil, nil
+        SA_TargetPart, SA_TargetPos = nil, nil
         return
     end
 
@@ -1600,14 +1610,14 @@ local function SA_UpdateTarget()
     if best and not SA_CheckWall(best.pos, best.model) then best = nil end
 
     if best then
-        SA_Target, SA_TargetPart = best.model, best.part
+        SA_TargetPart = best.part
         local p = best.pos
         if getgenv().SilentAim_Prediction > 0 and best.part:IsA("BasePart") then
             p = p + (best.part.AssemblyLinearVelocity or Vector3.zero) * getgenv().SilentAim_Prediction
         end
         SA_TargetPos = p
     else
-        SA_Target, SA_TargetPart, SA_TargetPos = nil, nil, nil
+        SA_TargetPart, SA_TargetPos = nil, nil
     end
 end
 
@@ -1725,7 +1735,21 @@ end
 local SAConfig = SilentAimTab:DrawSection({ Name = "Configurações", Position = 'left' });
 local SAVisual = SilentAimTab:DrawSection({ Name = "Visual", Position = 'right' });
 
-SAConfig:AddToggle({ Name = "Ativar Silent Aim", Default = false, Callback = function(v) getgenv().SilentAim_Ativo = v end });
+local function SA_SetActive(state)
+    getgenv().SilentAim_Ativo = state
+    if state then
+        if not SA_FOVConn then
+            SA_FOVConn = RunService.RenderStepped:Connect(SA_FOVRender)
+        end
+    else
+        if SA_FOVConn then
+            SA_FOVConn:Disconnect()
+            SA_FOVConn = nil
+        end
+        if SA_FOVCircle then SA_FOVCircle.Visible = false end
+    end
+end
+SAConfig:AddToggle({ Name = "Ativar Silent Aim", Default = false, Callback = SA_SetActive });
 SAConfig:AddToggle({ Name = "Team Check", Default = false, Callback = function(v) getgenv().SilentAim_TeamCheck = v end });
 SAConfig:AddToggle({ Name = "Wall Check", Default = true, Callback = function(v) getgenv().SilentAim_WallCheck = v end });
 SAConfig:AddToggle({ Name = "Fire Func Check", Default = true, Callback = function(v) getgenv().SilentAim_FireFunc = v end });
@@ -1764,9 +1788,7 @@ local HitboxTab = CombatContainer:DrawTab({
 local hitboxSize = 10
 local hitboxTransparency = 0.9
 local hitboxEnabled = false
-local espEnabled = false
-local espGuis = {} -- Stores ESP GUI objects
-local hitboxIncreaseButton, hitboxDecreaseButton, fovIncreaseButton, fovDecreaseButton
+local hitboxIncreaseButton, hitboxDecreaseButton
 local function isEnemy(player)
     if not player or not localPlayer then return false end
     local playerTeam = player.Team
@@ -1918,29 +1940,6 @@ if isR15 then
             part.Material = Enum.Material.Plastic  
             part.CanCollide = true  
         end  
-    end  
-end
-
-end
-
-local function destroyCharacterParts(character)
-if not character then return end
-
--- Skip if this is the local player's character  
-local player = Players:GetPlayerFromCharacter(character)  
-if player and player == localPlayer then  
-    return  
-end  
-  
-for _, descendant in ipairs(character:GetDescendants()) do  
-    if descendant:IsA("BasePart") then  
-        descendant.Size = Vector3.new(1, 1, 1)  
-        descendant.Transparency = 0.8  
-        descendant.BrickColor = BrickColor.new("Dark grey")  
-        descendant.Material = Enum.Material.SmoothPlastic  
-        descendant.CanCollide = false  
-        descendant.Anchored = false  
-        descendant.Velocity = Vector3.new(0, -50, 0)  
     end  
 end
 
@@ -2105,7 +2104,7 @@ hitboxDecreaseButton.Visible = false
 
 end
 do -- escopo local (limite de 200 registradores)
-local MagneticAimTab = CombatContainer:DrawTab({
+CombatContainer:DrawTab({
 	Name = " Magnetic Aim  ",
 	Type = "Double"
 });
@@ -2121,12 +2120,12 @@ local CombatNPCContainer = Window:DrawContainerTab({
 	Name = "| Combat NPC",
 	Icon = "crosshair",
 });
-local NpcAimbotTab = CombatNPCContainer:DrawTab({
+CombatNPCContainer:DrawTab({
 	Name = " Npc Aimbot  ",
 	Type = "Single",
 	EnableScrolling = true,
 });
-local NpcMagnetTab = CombatNPCContainer:DrawTab({
+CombatNPCContainer:DrawTab({
 	Name = " Npc Magnet  ",
 	Type = "Single",
 	EnableScrolling = true,
@@ -2245,8 +2244,9 @@ local function InitPlayerESP(player)
     
     ESP_Cache[player] = data
 end
--- Loop de Monitoramento de Limpeza (Roda independente para garantir remoção)
-RunService.Heartbeat:Connect(function()
+-- Loop de Monitoramento de Limpeza (conectado apenas quando o ESP está ativo)
+local ESP_CleanConn = nil
+local function ESP_Cleanup()
     for player, _ in pairs(ESP_Cache) do
         local char = player.Character
         local hum = char and char:FindFirstChild("Humanoid")
@@ -2255,28 +2255,32 @@ RunService.Heartbeat:Connect(function()
             ClearESP(player)
         end
     end
-end)
--- Loop de Renderização
-RunService.RenderStepped:Connect(function()
+end
+-- Loop de Renderização (conectado apenas quando o ESP está ativo)
+local ESP_RenderConn = nil
+local function ESP_HideAll()
+    for _, data in pairs(ESP_Cache) do
+        pcall(function()
+            for _, v in pairs(data.Box) do v.Visible = false end
+            if data.BoxFill then data.BoxFill.Visible = false end
+            if data.BoxGradient then for _, g in pairs(data.BoxGradient) do g.Visible = false end end
+            data.Tracer.Visible = false
+            data.Name.Visible = false
+            data.Distance.Visible = false
+            data.Item.Visible = false
+            data.HealthBar.Visible = false
+            data.HealthBarOutline.Visible = false
+            data.HealthText.Visible = false
+            for _, v in pairs(data.Skeleton) do v.Visible = false end
+        end)
+    end
+end
+local function ESP_Render()
     if Config.Rainbow.Enabled then rainbowHue = (rainbowHue + Config.Rainbow.Speed) % 1 end
     local rainbowColor = Color3.fromHSV(rainbowHue, 1, 1)
 
     if not Config.Enabled then
-        for _, data in pairs(ESP_Cache) do
-            pcall(function()
-                for _, v in pairs(data.Box) do v.Visible = false end
-                if data.BoxFill then data.BoxFill.Visible = false end
-                if data.BoxGradient then for _, g in pairs(data.BoxGradient) do g.Visible = false end end
-                data.Tracer.Visible = false
-                data.Name.Visible = false
-                data.Distance.Visible = false
-                data.Item.Visible = false
-                data.HealthBar.Visible = false
-                data.HealthBarOutline.Visible = false
-                data.HealthText.Visible = false
-                for _, v in pairs(data.Skeleton) do v.Visible = false end
-            end)
-        end
+        ESP_HideAll()
         return
     end
 
@@ -2446,7 +2450,29 @@ RunService.RenderStepped:Connect(function()
             end
         end)
     end
-end)
+end
+
+local function ESP_SetEnabled(state)
+    Config.Enabled = state
+    if state then
+        if not ESP_RenderConn then
+            ESP_RenderConn = RunService.RenderStepped:Connect(ESP_Render)
+        end
+        if not ESP_CleanConn then
+            ESP_CleanConn = RunService.Heartbeat:Connect(ESP_Cleanup)
+        end
+    else
+        if ESP_RenderConn then
+            ESP_RenderConn:Disconnect()
+            ESP_RenderConn = nil
+        end
+        if ESP_CleanConn then
+            ESP_CleanConn:Disconnect()
+            ESP_CleanConn = nil
+        end
+        ESP_HideAll()
+    end
+end
 
 local Tab = VisualContainer:DrawTab({
 	Name = " Esp  ",
@@ -2457,7 +2483,7 @@ local Tab = VisualContainer:DrawTab({
 
 -- Seção Principal
 local SecMain = Tab:DrawSection({ Name = "Configurações Globais", Position = 'left' });
-SecMain:AddToggle({ Name = "Ativar ESP", Callback = function(v) Config.Enabled = v end });
+SecMain:AddToggle({ Name = "Ativar ESP", Callback = ESP_SetEnabled });
 SecMain:AddToggle({ Name = "Self ESP", Callback = function(v) Config.SelfESP = v end });
 SecMain:AddToggle({ Name = "Team Check", Callback = function(v) Config.TeamCheck = v end });
 SecMain:AddSlider({ Name = "Distância Máxima", Min = 100, Max = 10000, Default = 1000, Callback = function(v) Config.MaxDistance = v end });
@@ -2767,6 +2793,7 @@ local MB_Amplifier = 5      --If you know yk--
 local MB_Last = MB_Camera and MB_Camera.CFrame.LookVector or nil
 local MB_Effect = nil
 local MB_Enabled = false
+local MB_Connection = nil
 
 local function MB_Ensure()
     if not MB_Camera then return nil end
@@ -2777,14 +2804,32 @@ local function MB_Ensure()
     return MB_Effect
 end
 
+local function MB_Update()
+    if not MB_Enabled or not MB_Camera or not MB_Last then return end
+    local blur = MB_Ensure()
+    if not blur then return end
+    local magnitude = (MB_Camera.CFrame.LookVector - MB_Last).Magnitude
+    blur.Size = math.clamp(math.abs(magnitude) * MB_Amount * MB_Amplifier / 2, 0, 56)
+    MB_Last = MB_Camera.CFrame.LookVector
+end
+
 local function MB_SetState(state)
     MB_Enabled = state
     if state then
         if MB_Camera then MB_Last = MB_Camera.CFrame.LookVector end
         MB_Ensure()
-    elseif MB_Effect then
-        MB_Effect:Destroy()
-        MB_Effect = nil
+        if not MB_Connection then
+            MB_Connection = RunService.Heartbeat:Connect(MB_Update)
+        end
+    else
+        if MB_Connection then
+            MB_Connection:Disconnect()
+            MB_Connection = nil
+        end
+        if MB_Effect then
+            MB_Effect:Destroy()
+            MB_Effect = nil
+        end
     end
 end
 
@@ -2795,15 +2840,6 @@ workspace.Changed:Connect(function(property)
         if MB_Effect then MB_Effect:Destroy(); MB_Effect = nil end
         if MB_Enabled then MB_Ensure() end
     end
-end)
-
-RunService.Heartbeat:Connect(function()
-    if not MB_Enabled or not MB_Camera or not MB_Last then return end
-    local blur = MB_Ensure()
-    if not blur then return end
-    local magnitude = (MB_Camera.CFrame.LookVector - MB_Last).Magnitude
-    blur.Size = math.clamp(math.abs(magnitude) * MB_Amount * MB_Amplifier / 2, 0, 56)
-    MB_Last = MB_Camera.CFrame.LookVector
 end)
 
 MotionBlurSection:AddParagraph({
