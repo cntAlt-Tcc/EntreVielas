@@ -1655,80 +1655,111 @@ local function SA_CanRun()
     return SA_IsFireFunc()
 end
 
--- // Hook __namecall
-if SA_HookMeta then
-    local SA_OldNamecall
-    SA_OldNamecall = SA_HookMeta(game, "__namecall", function(...)
-        local method = SA_GetNamecall and SA_GetNamecall()
-        if not SA_CanRun() then return SA_OldNamecall(...) end
+-- // Hooks (instalados sob demanda: só com Silent Aim ativo e método que exige)
+-- Ficam fora do load para não deixar "__index"/"__namecall" hookados o tempo todo
+-- (era isso que detectores de "IndexInstance" flagavam).
+local SA_OldNamecall, SA_OldIndex
+local SA_NamecallHooked, SA_IndexHooked = false, false
 
-        local self = select(1, ...)
+local function SA_NamecallHook(...)
+    local method = SA_GetNamecall and SA_GetNamecall()
+    if not SA_CanRun() then return SA_OldNamecall(...) end
 
-        if method == "Raycast" and SA_Methods.Raycast and self == workspace then
+    local self = select(1, ...)
+
+    if method == "Raycast" and SA_Methods.Raycast and self == workspace then
+        local args = {...}
+        args[3] = (SA_TargetPos - args[2]).Unit * 1000
+        return SA_OldNamecall(unpack(args))
+    end
+
+    if self == workspace then
+        if (method == "FindPartOnRay" or method == "findPartOnRay") and SA_Methods.FindPartOnRay then
             local args = {...}
-            args[3] = (SA_TargetPos - args[2]).Unit * 1000
-            return SA_OldNamecall(unpack(args))
-        end
-
-        if self == workspace then
-            if (method == "FindPartOnRay" or method == "findPartOnRay") and SA_Methods.FindPartOnRay then
-                local args = {...}
-                local ray = args[2]
-                if typeof(ray) == "Ray" then
-                    args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
-                    return SA_OldNamecall(unpack(args))
-                end
-            end
-            if method == "FindPartOnRayWithIgnoreList" and SA_Methods.FindPartOnRayWithIgnoreList then
-                local args = {...}
-                local ray = args[2]
-                if typeof(ray) == "Ray" then
-                    args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
-                    return SA_OldNamecall(unpack(args))
-                end
-            end
-            if method == "FindPartOnRayWithWhitelist" and SA_Methods.FindPartOnRayWithWhitelist then
-                local args = {...}
-                local ray = args[2]
-                if typeof(ray) == "Ray" then
-                    args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
-                    return SA_OldNamecall(unpack(args))
-                end
+            local ray = args[2]
+            if typeof(ray) == "Ray" then
+                args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                return SA_OldNamecall(unpack(args))
             end
         end
-
-        if self == Camera then
-            if method == "ViewportPointToRay" and SA_Methods.ViewportPointToRay then
-                local origin = Camera.CFrame.Position
-                return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
-            end
-            if method == "ScreenPointToRay" and SA_Methods.ScreenPointToRay then
-                local origin = Camera.CFrame.Position
-                return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+        if method == "FindPartOnRayWithIgnoreList" and SA_Methods.FindPartOnRayWithIgnoreList then
+            local args = {...}
+            local ray = args[2]
+            if typeof(ray) == "Ray" then
+                args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                return SA_OldNamecall(unpack(args))
             end
         end
-
-        return SA_OldNamecall(...)
-    end)
-
-    -- // Hook __index (Mouse.Hit legado)
-    local SA_OldIndex
-    SA_OldIndex = SA_HookMeta(game, "__index", function(t, k)
-        if SA_CanRun() and typeof(t) == "Instance" and t:IsA("Mouse") then
-            if k == "Hit" and SA_Methods.MouseHit then
-                return CFrame.new(SA_TargetPos)
-            elseif k == "Target" and SA_Methods.MouseHit then
-                return SA_TargetPart
-            elseif (k == "X" or k == "Y") and SA_Methods.MouseHit then
-                local p = Camera:WorldToScreenPoint(SA_TargetPos)
-                return p[k]
-            elseif k == "UnitRay" and SA_Methods.MouseHit then
-                local origin = SA_OldIndex(t, "UnitRay").Origin
-                return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+        if method == "FindPartOnRayWithWhitelist" and SA_Methods.FindPartOnRayWithWhitelist then
+            local args = {...}
+            local ray = args[2]
+            if typeof(ray) == "Ray" then
+                args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+                return SA_OldNamecall(unpack(args))
             end
         end
-        return SA_OldIndex(t, k)
-    end)
+    end
+
+    if self == Camera then
+        if method == "ViewportPointToRay" and SA_Methods.ViewportPointToRay then
+            local origin = Camera.CFrame.Position
+            return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+        end
+        if method == "ScreenPointToRay" and SA_Methods.ScreenPointToRay then
+            local origin = Camera.CFrame.Position
+            return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+        end
+    end
+
+    return SA_OldNamecall(...)
+end
+
+local function SA_IndexHook(t, k)
+    if SA_CanRun() and typeof(t) == "Instance" and t:IsA("Mouse") then
+        if k == "Hit" and SA_Methods.MouseHit then
+            return CFrame.new(SA_TargetPos)
+        elseif k == "Target" and SA_Methods.MouseHit then
+            return SA_TargetPart
+        elseif (k == "X" or k == "Y") and SA_Methods.MouseHit then
+            local p = Camera:WorldToScreenPoint(SA_TargetPos)
+            return p[k]
+        elseif k == "UnitRay" and SA_Methods.MouseHit then
+            local origin = SA_OldIndex(t, "UnitRay").Origin
+            return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+        end
+    end
+    return SA_OldIndex(t, k)
+end
+
+local function SA_NeedsNamecall()
+    return SA_Methods.Raycast or SA_Methods.FindPartOnRay or SA_Methods.FindPartOnRayWithIgnoreList
+        or SA_Methods.FindPartOnRayWithWhitelist or SA_Methods.ViewportPointToRay or SA_Methods.ScreenPointToRay
+end
+
+-- Instala/remove os hooks conforme o estado atual (ativo + método). Fica sem
+-- hook nenhum quando o Silent Aim está desligado ou o método não precisa.
+local function SA_UpdateHooks()
+    if not SA_HookMeta then return end
+
+    local wantNamecall = getgenv().SilentAim_Ativo and SA_NeedsNamecall()
+    if wantNamecall and not SA_NamecallHooked then
+        SA_OldNamecall = SA_HookMeta(game, "__namecall", SA_NamecallHook)
+        SA_NamecallHooked = true
+    elseif not wantNamecall and SA_NamecallHooked then
+        SA_HookMeta(game, "__namecall", SA_OldNamecall)
+        SA_OldNamecall = nil
+        SA_NamecallHooked = false
+    end
+
+    local wantIndex = getgenv().SilentAim_Ativo and SA_Methods.MouseHit
+    if wantIndex and not SA_IndexHooked then
+        SA_OldIndex = SA_HookMeta(game, "__index", SA_IndexHook)
+        SA_IndexHooked = true
+    elseif not wantIndex and SA_IndexHooked then
+        SA_HookMeta(game, "__index", SA_OldIndex)
+        SA_OldIndex = nil
+        SA_IndexHooked = false
+    end
 end
 
 -- // UI
@@ -1748,6 +1779,7 @@ local function SA_SetActive(state)
         end
         if SA_FOVCircle then SA_FOVCircle.Visible = false end
     end
+    SA_UpdateHooks()
 end
 SAConfig:AddToggle({ Name = "Ativar Silent Aim", Default = false, Callback = SA_SetActive });
 SAConfig:AddToggle({ Name = "Team Check", Default = false, Callback = function(v) getgenv().SilentAim_TeamCheck = v end });
@@ -1771,6 +1803,7 @@ SAVisual:AddDropdown({
     Callback = function(v)
         for k in pairs(SA_Methods) do SA_Methods[k] = false end
         SA_Methods[v] = true
+        SA_UpdateHooks()
     end
 });
 SAVisual:AddParagraph({ Title = "Métodos seguros:", Content = "Raycast, FindPartOnRay*" });
