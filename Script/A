@@ -1489,13 +1489,15 @@ getgenv().SilentAim_Ativo      = false
 getgenv().SilentAim_TeamCheck  = false
 getgenv().SilentAim_WallCheck  = true
 getgenv().SilentAim_FireFunc   = true
-getgenv().SilentAim_TargetPart = "Head"
+getgenv().SilentAim_TargetPart = "Nearest" -- "Head", "HumanoidRootPart", "Nearest"
 getgenv().SilentAim_FOV        = 150
 getgenv().SilentAim_ShowFOV    = true
+getgenv().SilentAim_ShowTarget = false
 getgenv().SilentAim_HitChance  = 100
 getgenv().SilentAim_Prediction = 0
+getgenv().SilentAim_NPCs       = true
 
--- // Métodos ativos (somente um por vez via UI)
+-- // Métodos ativos (multi-seleção via UI)
 local SA_Methods = {
     Raycast = true,
     FindPartOnRay = false,
@@ -1511,8 +1513,12 @@ local SA_GetNamecall = getnamecallmethod
 local SA_CheckCaller = checkcaller
 local SA_HookMeta    = hookmetamethod
 
--- // Cache do alvo
+-- // Cache do alvo (recalculado a cada frame enquanto ativo)
 local SA_TargetPart, SA_TargetPos = nil, nil
+local SA_ChanceOK = true
+
+-- // Partes válidas para a busca "Nearest"
+local SA_ValidParts = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"}
 
 -- // FOV (Drawing.Circle)
 local SA_FOVCircle
@@ -1522,16 +1528,36 @@ pcall(function()
     SA_FOVCircle.Radius, SA_FOVCircle.Filled, SA_FOVCircle.Visible, SA_FOVCircle.Transparency = 150, false, false, 0.85
 end)
 
+-- // Marcador do alvo (onde o silent aim vai atirar)
+local SA_TargetMarker
+pcall(function()
+    SA_TargetMarker = Drawing.new("Square")
+    SA_TargetMarker.Thickness, SA_TargetMarker.Filled, SA_TargetMarker.Visible = 1.5, false, false
+    SA_TargetMarker.Size = Vector2.new(16, 16)
+end)
+
 local SA_FOVConn = nil
 local function SA_FOVRender()
-    if not SA_FOVCircle then return end
-    if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowFOV then
-        SA_FOVCircle.Visible  = true
-        SA_FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-        SA_FOVCircle.Radius   = getgenv().SilentAim_FOV
-        SA_FOVCircle.Color    = getgenv().Aimbot_FOVColor
-    else
-        SA_FOVCircle.Visible = false
+    if SA_FOVCircle then
+        if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowFOV then
+            SA_FOVCircle.Visible  = true
+            SA_FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+            SA_FOVCircle.Radius   = getgenv().SilentAim_FOV
+            SA_FOVCircle.Color    = getgenv().Aimbot_FOVColor
+        else
+            SA_FOVCircle.Visible = false
+        end
+    end
+
+    if SA_TargetMarker then
+        if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowTarget and SA_TargetPos then
+            local pos, onScreen = Camera:WorldToViewportPoint(SA_TargetPos)
+            SA_TargetMarker.Position = Vector2.new(pos.X, pos.Y)
+            SA_TargetMarker.Visible  = onScreen and pos.Z > 0
+            SA_TargetMarker.Color    = getgenv().Aimbot_FOVColor
+        else
+            SA_TargetMarker.Visible = false
+        end
     end
 end
 
@@ -1553,10 +1579,25 @@ local function SA_ConsiderModel(model, center, best)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return best end
 
-    local part = model:FindFirstChild(getgenv().SilentAim_TargetPart) or model:FindFirstChild("HumanoidRootPart")
+    local part
+    if getgenv().SilentAim_TargetPart == "Nearest" then
+        local partDist = math.huge
+        for _, name in ipairs(SA_ValidParts) do
+            local p = model:FindFirstChild(name)
+            if p and p:IsA("BasePart") then
+                local pos, onScreen = Camera:WorldToViewportPoint(p.Position)
+                if onScreen and pos.Z > 0 then
+                    local d = (center - Vector2.new(pos.X, pos.Y)).Magnitude
+                    if d < partDist then partDist = d; part = p end
+                end
+            end
+        end
+    else
+        part = model:FindFirstChild(getgenv().SilentAim_TargetPart) or model:FindFirstChild("HumanoidRootPart")
+    end
     if not part then return best end
 
-    local ok, pos, onScreen = pcall(function() return Camera:WorldToScreenPoint(part.Position) end)
+    local ok, pos, onScreen = pcall(function() return Camera:WorldToViewportPoint(part.Position) end)
     if not ok or not onScreen or pos.Z <= 0 then return best end
 
     local dist = (center - Vector2.new(pos.X, pos.Y)).Magnitude
@@ -1603,8 +1644,10 @@ local function SA_UpdateTarget()
         end
     end
 
-    for _, model in ipairs(SA_ScanNPCs()) do
-        best = SA_ConsiderModel(model, center, best)
+    if getgenv().SilentAim_NPCs then
+        for _, model in ipairs(SA_ScanNPCs()) do
+            best = SA_ConsiderModel(model, center, best)
+        end
     end
 
     if best and not SA_CheckWall(best.pos, best.model) then best = nil end
@@ -1613,7 +1656,7 @@ local function SA_UpdateTarget()
         SA_TargetPart = best.part
         local p = best.pos
         if getgenv().SilentAim_Prediction > 0 and best.part:IsA("BasePart") then
-            p = p + (best.part.AssemblyLinearVelocity or Vector3.zero) * getgenv().SilentAim_Prediction
+            p = p + (best.part.AssemblyLinearVelocity or Vector3.new(0, 0, 0)) * getgenv().SilentAim_Prediction
         end
         SA_TargetPos = p
     else
@@ -1621,18 +1664,18 @@ local function SA_UpdateTarget()
     end
 end
 
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        pcall(SA_UpdateTarget)
-    end
-end)
-
 -- // Helpers
-local function SA_PassChance()
+local function SA_RollChance()
     local chance = getgenv().SilentAim_HitChance
     if chance >= 100 then return true end
     return math.random(1, 100) <= chance
+end
+
+-- // Alvo por frame: mantém o alvo fresco (evita mira em posição atrasada)
+local SA_TargetConn = nil
+local function SA_TargetLoop()
+    pcall(SA_UpdateTarget)
+    SA_ChanceOK = SA_RollChance()
 end
 
 local SA_FireKeywords = {
@@ -1651,8 +1694,31 @@ end
 local function SA_CanRun()
     if not getgenv().SilentAim_Ativo or SA_TargetPos == nil then return false end
     if SA_CheckCaller and SA_CheckCaller() then return false end
-    if not SA_PassChance() then return false end
+    if not SA_ChanceOK then return false end
     return SA_IsFireFunc()
+end
+
+-- // Validação de argumentos (evita corromper chamadas não relacionadas)
+local SA_ExpectedArgs = {
+    Raycast = { ArgCountRequired = 3, Args = {"Instance", "Vector3", "Vector3", "RaycastParams"} },
+    FindPartOnRay = { ArgCountRequired = 2, Args = {"Instance", "Ray", "Instance", "boolean", "boolean"} },
+    FindPartOnRayWithIgnoreList = { ArgCountRequired = 3, Args = {"Instance", "Ray", "table", "boolean", "boolean"} },
+    FindPartOnRayWithWhitelist = { ArgCountRequired = 3, Args = {"Instance", "Ray", "table", "boolean"} },
+}
+local function SA_ValidateArgs(args, method)
+    local spec = SA_ExpectedArgs[method]
+    if not spec then return true end
+    if #args < spec.ArgCountRequired then return false end
+    local matches = 0
+    for i, arg in ipairs(args) do
+        if spec.Args[i] and typeof(arg) == spec.Args[i] then matches = matches + 1 end
+    end
+    return matches >= spec.ArgCountRequired
+end
+
+-- // Direção (mira no alvo, a partir da origem do tiro)
+local function SA_Direction(origin, dest)
+    return (dest - origin).Unit * 1000
 end
 
 -- // Hooks (instalados sob demanda: só com Silent Aim ativo e método que exige)
@@ -1665,49 +1731,43 @@ local function SA_NamecallHook(...)
     local method = SA_GetNamecall and SA_GetNamecall()
     if not SA_CanRun() then return SA_OldNamecall(...) end
 
-    local self = select(1, ...)
+    local args = {...}
+    local self = args[1]
+    if self ~= workspace and self ~= Camera then return SA_OldNamecall(...) end
 
-    if method == "Raycast" and SA_Methods.Raycast and self == workspace then
-        local args = {...}
-        args[3] = (SA_TargetPos - args[2]).Unit * 1000
-        return SA_OldNamecall(unpack(args))
+    -- Raycast: args[2]=origem (Vector3), args[3]=direção
+    if self == workspace and method == "Raycast" and SA_Methods.Raycast then
+        if SA_ValidateArgs(args, "Raycast") then
+            local origin = args[2]
+            if typeof(origin) == "Vector3" then
+                args[3] = SA_Direction(origin, SA_TargetPos)
+                return SA_OldNamecall(unpack(args))
+            end
+        end
     end
 
+    -- FindPartOnRay*: args[2]=Ray
     if self == workspace then
-        if (method == "FindPartOnRay" or method == "findPartOnRay") and SA_Methods.FindPartOnRay then
-            local args = {...}
-            local ray = args[2]
-            if typeof(ray) == "Ray" then
-                args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
-                return SA_OldNamecall(unpack(args))
-            end
-        end
-        if method == "FindPartOnRayWithIgnoreList" and SA_Methods.FindPartOnRayWithIgnoreList then
-            local args = {...}
-            local ray = args[2]
-            if typeof(ray) == "Ray" then
-                args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
-                return SA_OldNamecall(unpack(args))
-            end
-        end
-        if method == "FindPartOnRayWithWhitelist" and SA_Methods.FindPartOnRayWithWhitelist then
-            local args = {...}
-            local ray = args[2]
-            if typeof(ray) == "Ray" then
-                args[2] = Ray.new(ray.Origin, (SA_TargetPos - ray.Origin).Unit * 1000)
+        local ray = args[2]
+        local name = method
+        if name == "findPartOnRay" then name = "FindPartOnRay" end
+        if typeof(ray) == "Ray" and SA_Methods[name] then
+            if SA_ValidateArgs(args, name) then
+                args[2] = Ray.new(ray.Origin, SA_Direction(ray.Origin, SA_TargetPos))
                 return SA_OldNamecall(unpack(args))
             end
         end
     end
 
+    -- Camera: ViewportPointToRay / ScreenPointToRay devolvem um Ray
     if self == Camera then
         if method == "ViewportPointToRay" and SA_Methods.ViewportPointToRay then
             local origin = Camera.CFrame.Position
-            return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+            return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
         end
         if method == "ScreenPointToRay" and SA_Methods.ScreenPointToRay then
             local origin = Camera.CFrame.Position
-            return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+            return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
         end
     end
 
@@ -1725,7 +1785,7 @@ local function SA_IndexHook(t, k)
             return p[k]
         elseif k == "UnitRay" and SA_Methods.MouseHit then
             local origin = SA_OldIndex(t, "UnitRay").Origin
-            return Ray.new(origin, (SA_TargetPos - origin).Unit * 1000)
+            return Ray.new(origin, SA_Direction(origin, SA_TargetPos))
         end
     end
     return SA_OldIndex(t, k)
@@ -1772,12 +1832,20 @@ local function SA_SetActive(state)
         if not SA_FOVConn then
             SA_FOVConn = RunService.RenderStepped:Connect(SA_FOVRender)
         end
+        if not SA_TargetConn then
+            SA_TargetConn = RunService.RenderStepped:Connect(SA_TargetLoop)
+        end
     else
         if SA_FOVConn then
             SA_FOVConn:Disconnect()
             SA_FOVConn = nil
         end
+        if SA_TargetConn then
+            SA_TargetConn:Disconnect()
+            SA_TargetConn = nil
+        end
         if SA_FOVCircle then SA_FOVCircle.Visible = false end
+        SA_TargetPart, SA_TargetPos = nil, nil
     end
     SA_UpdateHooks()
 end
@@ -1785,10 +1853,11 @@ SAConfig:AddToggle({ Name = "Ativar Silent Aim", Default = false, Callback = SA_
 SAConfig:AddToggle({ Name = "Team Check", Default = false, Callback = function(v) getgenv().SilentAim_TeamCheck = v end });
 SAConfig:AddToggle({ Name = "Wall Check", Default = true, Callback = function(v) getgenv().SilentAim_WallCheck = v end });
 SAConfig:AddToggle({ Name = "Fire Func Check", Default = true, Callback = function(v) getgenv().SilentAim_FireFunc = v end });
+SAConfig:AddToggle({ Name = "Incluir NPCs", Default = true, Callback = function(v) getgenv().SilentAim_NPCs = v end });
 SAConfig:AddDropdown({
     Name = "Parte do Alvo",
-    Default = "Head",
-    Values = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
+    Default = "Nearest",
+    Values = {"Nearest", "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
     Callback = function(v) getgenv().SilentAim_TargetPart = v end
 });
 SAConfig:AddSlider({ Name = "FOV Radius", Min = 20, Max = 500, Default = 150, Callback = function(v) getgenv().SilentAim_FOV = v end });
@@ -1796,13 +1865,19 @@ SAConfig:AddSlider({ Name = "Hit Chance", Min = 1, Max = 100, Default = 100, Cal
 SAConfig:AddSlider({ Name = "Predição", Min = 0, Max = 0.5, Default = 0, Round = 2, Callback = function(v) getgenv().SilentAim_Prediction = v end });
 
 SAVisual:AddToggle({ Name = "Mostrar FOV", Default = true, Callback = function(v) getgenv().SilentAim_ShowFOV = v end });
+SAVisual:AddToggle({ Name = "Mostrar Alvo", Default = false, Callback = function(v) getgenv().SilentAim_ShowTarget = v end });
 SAVisual:AddDropdown({
-    Name = "Método",
-    Default = "Raycast",
+    Name = "Métodos",
+    Default = {"Raycast"},
     Values = {"Raycast", "FindPartOnRay", "FindPartOnRayWithIgnoreList", "FindPartOnRayWithWhitelist", "ViewportPointToRay", "ScreenPointToRay", "MouseHit"},
-    Callback = function(v)
+    Multi = true,
+    Callback = function(selected)
         for k in pairs(SA_Methods) do SA_Methods[k] = false end
-        SA_Methods[v] = true
+        if type(selected) == "table" then
+            for k, on in pairs(selected) do
+                if on then SA_Methods[k] = true end
+            end
+        end
         SA_UpdateHooks()
     end
 });
