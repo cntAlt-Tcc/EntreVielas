@@ -169,6 +169,10 @@ local SpeedValue = 16
 local SpeedLoopConnection = nil
 local TextboxSpeedAPI = nil
 local SliderSpeedAPI = nil
+-- Guarda contra recursão slider<->textbox: SetValue dispara o Callback, que por
+-- sua vez chama SetValue do par. Sem isso o LoadConfig/SaveConfig entra em
+-- recursão infinita (stack overflow).
+local SpeedSyncing = false
 local function GetHumanoid()
     local Char = Player.Character
     if not Char then return nil end
@@ -287,6 +291,9 @@ SliderSpeedAPI = MovementSection:AddSlider({
     Round = 0,
     Flag = "Movement_SpeedValue",
     Callback = function(newValue)
+        if SpeedSyncing then return end
+        SpeedSyncing = true
+
         local roundedValue = math.floor(tonumber(newValue) or 16)
         SpeedValue = roundedValue
 
@@ -302,6 +309,8 @@ SliderSpeedAPI = MovementSection:AddSlider({
             Duration = 1.5,
             Icon = "rbxassetid://117056629401480"
         })
+
+        SpeedSyncing = false
     end
 })
 TextboxSpeedAPI = MovementSection:AddTextBox({
@@ -311,6 +320,9 @@ TextboxSpeedAPI = MovementSection:AddTextBox({
     Numeric = true,
     Flag = "Movement_SpeedText",
     Callback = function(text)
+        if SpeedSyncing then return end
+        SpeedSyncing = true
+
         local value = tonumber(text)
 
         if value and value >= 5 and value <= 150 then
@@ -327,6 +339,8 @@ TextboxSpeedAPI = MovementSection:AddTextBox({
                 TextboxSpeedAPI:SetValue(tostring(SpeedValue))
             end
         end
+
+        SpeedSyncing = false
     end
 })
 
@@ -694,6 +708,7 @@ local velocidadeVoo = 50
 local voando = false
 local vooConexao
 local FlySlider, FlyTextbox
+local FlySyncing = false
 local descendo = false
 local CoreGui = game:GetService("CoreGui")
 local function NotifyFly(title, text, time)
@@ -833,6 +848,9 @@ FlySlider = FlySection:AddSlider({
     Max = 500,
     Flag = "Movement_FlySpeed",
     Callback = function(v)
+        if FlySyncing then return end
+        FlySyncing = true
+
         local val = math.floor(v)
         velocidadeVoo = val
 
@@ -841,12 +859,18 @@ FlySlider = FlySection:AddSlider({
         end
 
         NotifyFly("FLY", "Velocidade: "..val, 0.5)
+
+        FlySyncing = false
     end
 })
 FlyTextbox = FlySection:AddTextBox({
+    Flag = "FlySection_VelocidadeporTexto",
     Name = "Velocidade por Texto",
     Placeholder = tostring(velocidadeVoo),
     Callback = function(text)
+        if FlySyncing then return end
+        FlySyncing = true
+
         local value = tonumber(text)
 
         if value and value >= 10 and value <= 500 then
@@ -861,6 +885,8 @@ FlyTextbox = FlySection:AddTextBox({
             NotifyFly("FLY", "Valor inválido!", 2)
             FlyTextbox:SetValue(tostring(velocidadeVoo))
         end
+
+        FlySyncing = false
     end
 })
 
@@ -1422,25 +1448,38 @@ end
 local Section = AimbotTab:DrawSection({ Name = "Configurações", Position = 'left' });
 local Visual = AimbotTab:DrawSection({ Name = "Visual FOV", Position = 'right' });
 
-Section:AddToggle({ Name = "Ativar Aimbot", Default = false, Callback = Aimbot_SetActive });
-Section:AddDropdown({ Name = "Método", Default = "Humanizado", Values = {"Aimbot Puro", "Humanizado"}, Callback = function(v) getgenv().Aimbot_Metodo = v end });
-Section:AddDropdown({ 
+Section:AddToggle({
+    Flag = "Section_AtivarAimbot", Name = "Ativar Aimbot", Default = false, Callback = Aimbot_SetActive });
+Section:AddDropdown({
+    Flag = "Section_Mtodo", Name = "Método", Default = "Humanizado", Values = {"Aimbot Puro", "Humanizado"}, Callback = function(v) getgenv().Aimbot_Metodo = v end });
+Section:AddDropdown({
+    Flag = "Section_PartedoAlvo", 
     Name = "Parte do Alvo", 
     Default = "Head", 
     Values = {"Head", "UpperTorso", "LowerTorso", "HumanoidRootPart", "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm", "LeftUpperLeg", "RightUpperLeg"}, 
     Callback = function(v) getgenv().Aimbot_TargetPart = v end 
 });
-Section:AddSlider({ Name = "Suavidade", Min = 1, Max = 100, Default = 50, Callback = function(v) getgenv().Aimbot_Forca = v end });
-Section:AddToggle({ Name = "Wallcheck", Default = false, Callback = function(v) getgenv().Aimbot_WallCheck = v end });
-Section:AddToggle({ Name = "Ignorar Amigos", Default = false, Callback = function(v) getgenv().Aimbot_IgnoreFriends = v end });
-Section:AddToggle({ Name = "Item Check (Você)", Default = false, Callback = function(v) getgenv().Aimbot_ItemCheck = v end });
-Section:AddToggle({ Name = "Ignorar Time", Default = false, Callback = function(v) getgenv().Aimbot_TeamCheck = v end });
+Section:AddSlider({
+    Flag = "Section_Suavidade", Name = "Suavidade", Min = 1, Max = 100, Default = 50, Callback = function(v) getgenv().Aimbot_Forca = v end });
+Section:AddToggle({
+    Flag = "Section_Wallcheck", Name = "Wallcheck", Default = false, Callback = function(v) getgenv().Aimbot_WallCheck = v end });
+Section:AddToggle({
+    Flag = "Section_IgnorarAmigos", Name = "Ignorar Amigos", Default = false, Callback = function(v) getgenv().Aimbot_IgnoreFriends = v end });
+Section:AddToggle({
+    Flag = "Section_ItemCheckVoc", Name = "Item Check (Você)", Default = false, Callback = function(v) getgenv().Aimbot_ItemCheck = v end });
+Section:AddToggle({
+    Flag = "Section_IgnorarTime", Name = "Ignorar Time", Default = false, Callback = function(v) getgenv().Aimbot_TeamCheck = v end });
 
-Visual:AddSlider({ Name = "Tamanho FOV", Min = 10, Max = 600, Default = 150, Callback = function(v) getgenv().Aimbot_FOV = v end });
-Visual:AddDropdown({ Name = "Estilo FOV", Default = "Círculo", Values = {"Círculo", "Quadrado", "Traçado", "Animado", "Nenhum"}, Callback = function(v) getgenv().Aimbot_FOVStyle = v end });
-Visual:AddColorPicker({ Name = "Cor FOV", Default = Color3.fromRGB(255,255,255), Callback = function(v) getgenv().Aimbot_FOVColor = v end });
-Visual:AddToggle({ Name = "FOV RGB", Default = false, Callback = function(v) getgenv().Aimbot_FOVRGB = v end });
-Visual:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 0.5, Round = 2, Callback = function(v) getgenv().Aimbot_FOVTransparency = v end });
+Visual:AddSlider({
+    Flag = "Visual_TamanhoFOV", Name = "Tamanho FOV", Min = 10, Max = 600, Default = 150, Callback = function(v) getgenv().Aimbot_FOV = v end });
+Visual:AddDropdown({
+    Flag = "Visual_EstiloFOV", Name = "Estilo FOV", Default = "Círculo", Values = {"Círculo", "Quadrado", "Traçado", "Animado", "Nenhum"}, Callback = function(v) getgenv().Aimbot_FOVStyle = v end });
+Visual:AddColorPicker({
+    Flag = "Visual_CorFOV", Name = "Cor FOV", Default = Color3.fromRGB(255,255,255), Callback = function(v) getgenv().Aimbot_FOVColor = v end });
+Visual:AddToggle({
+    Flag = "Visual_FOVRGB", Name = "FOV RGB", Default = false, Callback = function(v) getgenv().Aimbot_FOVRGB = v end });
+Visual:AddSlider({
+    Flag = "Visual_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 0.5, Round = 2, Callback = function(v) getgenv().Aimbot_FOVTransparency = v end });
 
 -- Whitelist UI
 local WSection = WhiteListTab:DrawSection({ Name = "Gerenciar", Position = 'left' });
@@ -1453,14 +1492,16 @@ local function refreshW()
     listText:SetContent(#t > 0 and table.concat(t, "\n") or "Nenhum")
 end
 
-local pDrop = WSection:AddDropdown({ Name = "Selecionar Jogador", Values = {"Atualize..."}, Callback = function(v) end })
+local pDrop = WSection:AddDropdown({
+    Flag = "WSection_SelecionarJogador", Name = "Selecionar Jogador", Default = "Atualize...", Values = {"Atualize..."}, Callback = function(v) end })
 WSection:AddButton({ Name = "Atualizar Jogadores", Callback = function()
     local n = {}
     for _, p in ipairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(n, p.Name) end end
     pDrop:SetValues(n)
 end });
 
-WSection:AddTextBox({ Name = "Nome Parcial", Placeholder = "Busca...", Callback = function(v) getgenv().Partial = v end })
+WSection:AddTextBox({
+    Flag = "WSection_NomeParcial", Name = "Nome Parcial", Placeholder = "Busca...", Callback = function(v) getgenv().Partial = v end })
 WSection:AddButton({ Name = "Adicionar", Callback = function()
     local sel = pDrop:GetValue()
     if sel and sel ~= "Atualize..." then getgenv().Aimbot_Whitelist[sel] = true end
@@ -1489,7 +1530,12 @@ local SilentAimTab = CombatContainer:DrawTab({
 getgenv().SilentAim_Ativo      = false
 getgenv().SilentAim_TeamCheck  = false
 getgenv().SilentAim_WallCheck  = true
-getgenv().SilentAim_FireFunc   = true
+-- Fire Func Check fica DESLIGADO por padrão. O gate por palavra-chave no
+-- traceback silencia o redirect em qualquer arma cuja função de tiro não tenha
+-- um nome "bonitinho" (o caso da MAIORIA das armas) -> era isso que fazia a
+-- maioria das balas não contar dano. A validação de argumentos por tipo já
+-- impede corromper chamadas não relacionadas, então o gate é opcional.
+getgenv().SilentAim_FireFunc   = false
 getgenv().SilentAim_TargetPart = "Nearest" -- "Head", "HumanoidRootPart", "Nearest"
 getgenv().SilentAim_FOV        = 150
 getgenv().SilentAim_ShowFOV    = true
@@ -1499,20 +1545,39 @@ getgenv().SilentAim_Prediction = 0
 getgenv().SilentAim_NPCs       = true
 
 -- // Métodos ativos (multi-seleção via UI)
+-- Liga por padrão todos os métodos baseados em ray: são os "métodos seguros"
+-- que o próprio menu documenta e cobrem a maioria dos sistemas de tiro. Os
+-- métodos via Camera/Mouse ficam opt-in (podem afetar coisas fora de tiro).
 local SA_Methods = {
     Raycast = true,
-    FindPartOnRay = false,
-    FindPartOnRayWithIgnoreList = false,
-    FindPartOnRayWithWhitelist = false,
+    FindPartOnRay = true,
+    FindPartOnRayWithIgnoreList = true,
+    FindPartOnRayWithWhitelist = true,
     ViewportPointToRay = false,
     ScreenPointToRay = false,
     MouseHit = false,
 }
 
 -- // API do executor
-local SA_GetNamecall = getnamecallmethod
-local SA_CheckCaller = checkcaller
-local SA_HookMeta    = hookmetamethod
+-- Resolvidos sob demanda (não no load): alguns executores só expõem
+-- getnamecallmethod/hookmetamethod depois do inject, e capturar nil no load
+-- deixava o silent aim morto (nunca redirecionava nada).
+local function SA_GetNamecall()
+    return (getnamecallmethod and getnamecallmethod()) or (syn and syn.getnamecallmethod and syn.getnamecallmethod())
+end
+local function SA_CheckCaller()
+    local f = checkcaller or (syn and syn.checkcaller)
+    return f and f() or false
+end
+local function SA_HookMeta(obj, name, fn)
+    local h = hookmetamethod or (syn and syn.hookmetamethod)
+    if not h then return nil end
+    return h(obj, name, fn)
+end
+local function SA_Closure(fn)
+    local nc = newcclosure or (syn and syn.newcclosure)
+    return nc and nc(fn) or fn
+end
 
 -- // Cache do alvo (recalculado a cada frame enquanto ativo)
 local SA_TargetPart, SA_TargetPos = nil, nil
@@ -1688,7 +1753,10 @@ local SA_FireKeywords = {
 }
 local function SA_IsFireFunc()
     if not getgenv().SilentAim_FireFunc then return true end
-    local tb = debug.traceback():lower()
+    -- Sem debug.traceback não dá pra inspecionar a pilha: não bloquear o tiro.
+    if not (debug and debug.traceback) then return true end
+    local ok, tb = pcall(function() return debug.traceback():lower() end)
+    if not ok or type(tb) ~= "string" then return true end
     for _, kw in ipairs(SA_FireKeywords) do
         if tb:find(kw, 1, true) then return true end
     end
@@ -1809,12 +1877,10 @@ end
 -- Instala/remove os hooks conforme o estado atual (ativo + método). Fica sem
 -- hook nenhum quando o Silent Aim está desligado ou o método não precisa.
 local function SA_UpdateHooks()
-    if not SA_HookMeta then return end
-
     local wantNamecall = getgenv().SilentAim_Ativo and SA_NeedsNamecall()
     if wantNamecall and not SA_NamecallHooked then
-        SA_OldNamecall = SA_HookMeta(game, "__namecall", SA_NamecallHook)
-        SA_NamecallHooked = true
+        SA_OldNamecall = SA_HookMeta(game, "__namecall", SA_Closure(SA_NamecallHook))
+        SA_NamecallHooked = SA_OldNamecall ~= nil
     elseif not wantNamecall and SA_NamecallHooked then
         SA_HookMeta(game, "__namecall", SA_OldNamecall)
         SA_OldNamecall = nil
@@ -1823,8 +1889,8 @@ local function SA_UpdateHooks()
 
     local wantIndex = getgenv().SilentAim_Ativo and SA_Methods.MouseHit
     if wantIndex and not SA_IndexHooked then
-        SA_OldIndex = SA_HookMeta(game, "__index", SA_IndexHook)
-        SA_IndexHooked = true
+        SA_OldIndex = SA_HookMeta(game, "__index", SA_Closure(SA_IndexHook))
+        SA_IndexHooked = SA_OldIndex ~= nil
     elseif not wantIndex and SA_IndexHooked then
         SA_HookMeta(game, "__index", SA_OldIndex)
         SA_OldIndex = nil
@@ -1859,24 +1925,36 @@ local function SA_SetActive(state)
     end
     SA_UpdateHooks()
 end
-SAConfig:AddToggle({ Name = "Ativar Silent Aim", Default = false, Callback = SA_SetActive });
-SAConfig:AddToggle({ Name = "Team Check", Default = false, Callback = function(v) getgenv().SilentAim_TeamCheck = v end });
-SAConfig:AddToggle({ Name = "Wall Check", Default = true, Callback = function(v) getgenv().SilentAim_WallCheck = v end });
-SAConfig:AddToggle({ Name = "Fire Func Check", Default = true, Callback = function(v) getgenv().SilentAim_FireFunc = v end });
-SAConfig:AddToggle({ Name = "Incluir NPCs", Default = true, Callback = function(v) getgenv().SilentAim_NPCs = v end });
+SAConfig:AddToggle({
+    Flag = "SAConfig_AtivarSilentAim", Name = "Ativar Silent Aim", Default = false, Callback = SA_SetActive });
+SAConfig:AddToggle({
+    Flag = "SAConfig_TeamCheck", Name = "Team Check", Default = false, Callback = function(v) getgenv().SilentAim_TeamCheck = v end });
+SAConfig:AddToggle({
+    Flag = "SAConfig_WallCheck", Name = "Wall Check", Default = true, Callback = function(v) getgenv().SilentAim_WallCheck = v end });
+SAConfig:AddToggle({
+    Flag = "SAConfig_FireFuncCheck", Name = "Fire Func Check", Default = false, Callback = function(v) getgenv().SilentAim_FireFunc = v end });
+SAConfig:AddToggle({
+    Flag = "SAConfig_IncluirNPCs", Name = "Incluir NPCs", Default = true, Callback = function(v) getgenv().SilentAim_NPCs = v end });
 SAConfig:AddDropdown({
+    Flag = "SAConfig_PartedoAlvo",
     Name = "Parte do Alvo",
     Default = "Nearest",
     Values = {"Nearest", "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
     Callback = function(v) getgenv().SilentAim_TargetPart = v end
 });
-SAConfig:AddSlider({ Name = "FOV Radius", Min = 20, Max = 500, Default = 150, Callback = function(v) getgenv().SilentAim_FOV = v end });
-SAConfig:AddSlider({ Name = "Hit Chance", Min = 1, Max = 100, Default = 100, Callback = function(v) getgenv().SilentAim_HitChance = v end });
-SAConfig:AddSlider({ Name = "Predição", Min = 0, Max = 0.5, Default = 0, Round = 2, Callback = function(v) getgenv().SilentAim_Prediction = v end });
+SAConfig:AddSlider({
+    Flag = "SAConfig_FOVRadius", Name = "FOV Radius", Min = 20, Max = 500, Default = 150, Callback = function(v) getgenv().SilentAim_FOV = v end });
+SAConfig:AddSlider({
+    Flag = "SAConfig_HitChance", Name = "Hit Chance", Min = 1, Max = 100, Default = 100, Callback = function(v) getgenv().SilentAim_HitChance = v end });
+SAConfig:AddSlider({
+    Flag = "SAConfig_Predio", Name = "Predição", Min = 0, Max = 0.5, Default = 0, Round = 2, Callback = function(v) getgenv().SilentAim_Prediction = v end });
 
-SAVisual:AddToggle({ Name = "Mostrar FOV", Default = true, Callback = function(v) getgenv().SilentAim_ShowFOV = v end });
-SAVisual:AddToggle({ Name = "Mostrar Alvo", Default = false, Callback = function(v) getgenv().SilentAim_ShowTarget = v end });
+SAVisual:AddToggle({
+    Flag = "SAVisual_MostrarFOV", Name = "Mostrar FOV", Default = true, Callback = function(v) getgenv().SilentAim_ShowFOV = v end });
+SAVisual:AddToggle({
+    Flag = "SAVisual_MostrarAlvo", Name = "Mostrar Alvo", Default = false, Callback = function(v) getgenv().SilentAim_ShowTarget = v end });
 SAVisual:AddDropdown({
+    Flag = "SAVisual_Mtodos",
     Name = "Métodos",
     Default = {"Raycast"},
     Values = {"Raycast", "FindPartOnRay", "FindPartOnRayWithIgnoreList", "FindPartOnRayWithWhitelist", "ViewportPointToRay", "ScreenPointToRay", "MouseHit"},
@@ -2677,63 +2755,108 @@ local Tab = VisualContainer:DrawTab({
 
 -- Seção Principal
 local SecMain = Tab:DrawSection({ Name = "Configurações Globais", Position = 'left' });
-SecMain:AddToggle({ Name = "Ativar ESP", Callback = ESP_SetEnabled });
-SecMain:AddToggle({ Name = "Self ESP", Callback = function(v) Config.SelfESP = v end });
-SecMain:AddToggle({ Name = "Team Check", Callback = function(v) Config.TeamCheck = v end });
-SecMain:AddSlider({ Name = "Distância Máxima", Min = 100, Max = 10000, Default = 1000, Callback = function(v) Config.MaxDistance = v end });
-SecMain:AddToggle({ Name = "Escalonamento Dinâmico", Default = true, Callback = function(v) Config.DynamicScaling = v end });
+SecMain:AddToggle({
+    Flag = "SecMain_AtivarESP", Name = "Ativar ESP", Callback = ESP_SetEnabled });
+SecMain:AddToggle({
+    Flag = "SecMain_SelfESP", Name = "Self ESP", Callback = function(v) Config.SelfESP = v end });
+SecMain:AddToggle({
+    Flag = "SecMain_TeamCheck", Name = "Team Check", Callback = function(v) Config.TeamCheck = v end });
+SecMain:AddSlider({
+    Flag = "SecMain_DistnciaMxima", Name = "Distância Máxima", Min = 100, Max = 10000, Default = 1000, Callback = function(v) Config.MaxDistance = v end });
+SecMain:AddToggle({
+    Flag = "SecMain_EscalonamentoDinmico", Name = "Escalonamento Dinâmico", Default = true, Callback = function(v) Config.DynamicScaling = v end });
 
 -- Seção Box
 local SecBox = Tab:DrawSection({ Name = "Box ESP", Position = 'right' });
-SecBox:AddToggle({ Name = "Ativar Box", Callback = function(v) Config.Box.Enabled = v end }).Link:AddColorPicker({ Default = Config.Box.Color, Callback = function(v) Config.Box.Color = v end });
-SecBox:AddDropdown({ Name = "Tipo de Box", Default = "Full", Values = {"Full", "Corner"}, Callback = function(v) Config.Box.Type = v end });
-SecBox:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Box.Thickness = v end });
-SecBox:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Box.Transparency = v end });
-SecBox:AddToggle({ Name = "Preencher Box", Default = false, Callback = function(v) Config.Box.Fill = v end }).Link:AddColorPicker({ Default = Config.Box.FillColor, Callback = function(v) Config.Box.FillColor = v end });
-SecBox:AddSlider({ Name = "Transp. Preenchimento", Min = 0, Max = 1, Default = 0.6, Round = 2, Callback = function(v) Config.Box.FillTransparency = v end });
-SecBox:AddToggle({ Name = "Gradiente", Default = false, Callback = function(v) Config.Box.Gradient = v end }).Link:AddColorPicker({ Default = Config.Box.GradientColor, Callback = function(v) Config.Box.GradientColor = v end });
-SecBox:AddSlider({ Name = "Transp. Gradiente", Min = 0, Max = 1, Default = 0, Round = 2, Callback = function(v) Config.Box.GradientTransparency = v end });
+SecBox:AddToggle({
+    Flag = "SecBox_AtivarBox", Name = "Ativar Box", Callback = function(v) Config.Box.Enabled = v end }).Link:AddColorPicker({
+    Flag = "SecBox_CorBox", Default = Config.Box.Color, Callback = function(v) Config.Box.Color = v end });
+SecBox:AddDropdown({
+    Flag = "SecBox_TipodeBox", Name = "Tipo de Box", Default = "Full", Values = {"Full", "Corner"}, Callback = function(v) Config.Box.Type = v end });
+SecBox:AddSlider({
+    Flag = "SecBox_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Box.Thickness = v end });
+SecBox:AddSlider({
+    Flag = "SecBox_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Box.Transparency = v end });
+SecBox:AddToggle({
+    Flag = "SecBox_PreencherBox", Name = "Preencher Box", Default = false, Callback = function(v) Config.Box.Fill = v end }).Link:AddColorPicker({
+    Flag = "SecBox_CorPreenchimento", Default = Config.Box.FillColor, Callback = function(v) Config.Box.FillColor = v end });
+SecBox:AddSlider({
+    Flag = "SecBox_TranspPreenchimento", Name = "Transp. Preenchimento", Min = 0, Max = 1, Default = 0.6, Round = 2, Callback = function(v) Config.Box.FillTransparency = v end });
+SecBox:AddToggle({
+    Flag = "SecBox_Gradiente", Name = "Gradiente", Default = false, Callback = function(v) Config.Box.Gradient = v end }).Link:AddColorPicker({
+    Flag = "SecBox_CorGradiente", Default = Config.Box.GradientColor, Callback = function(v) Config.Box.GradientColor = v end });
+SecBox:AddSlider({
+    Flag = "SecBox_TranspGradiente", Name = "Transp. Gradiente", Min = 0, Max = 1, Default = 0, Round = 2, Callback = function(v) Config.Box.GradientTransparency = v end });
 
 -- Seção Tracers
 local SecTracer = Tab:DrawSection({ Name = "Tracers", Position = 'left' });
-SecTracer:AddToggle({ Name = "Ativar Tracers", Callback = function(v) Config.Tracer.Enabled = v end }).Link:AddColorPicker({ Default = Config.Tracer.Color, Callback = function(v) Config.Tracer.Color = v end });
-SecTracer:AddDropdown({ Name = "Origem", Default = "Bottom", Values = {"Top", "Bottom", "Mouse"}, Callback = function(v) Config.Tracer.Origin = v end });
-SecTracer:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Tracer.Thickness = v end });
-SecTracer:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Tracer.Transparency = v end });
+SecTracer:AddToggle({
+    Flag = "SecTracer_AtivarTracers", Name = "Ativar Tracers", Callback = function(v) Config.Tracer.Enabled = v end }).Link:AddColorPicker({
+    Flag = "SecTracer_Cor", Default = Config.Tracer.Color, Callback = function(v) Config.Tracer.Color = v end });
+SecTracer:AddDropdown({
+    Flag = "SecTracer_Origem", Name = "Origem", Default = "Bottom", Values = {"Top", "Bottom", "Mouse"}, Callback = function(v) Config.Tracer.Origin = v end });
+SecTracer:AddSlider({
+    Flag = "SecTracer_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Tracer.Thickness = v end });
+SecTracer:AddSlider({
+    Flag = "SecTracer_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Tracer.Transparency = v end });
 
 -- Seção FOV Line (linha do centro da tela até o alvo do Silent Aim/Aimbot)
 local SecFOVLine = Tab:DrawSection({ Name = "FOV Line", Position = 'right' });
-SecFOVLine:AddToggle({ Name = "Ativar FOV Line", Callback = FOVLine_SetEnabled }).Link:AddColorPicker({ Default = Config.FOVLine.Color, Callback = function(v) Config.FOVLine.Color = v end });
-SecFOVLine:AddDropdown({ Name = "Alvo", Default = "Ambos", Values = {"Ambos", "Silent Aim", "Aimbot"}, Callback = function(v) Config.FOVLine.Mode = v end });
-SecFOVLine:AddDropdown({ Name = "Origem", Default = "Tela", Values = {"Tela", "Mouse", "Baixo", "Cima"}, Callback = function(v) Config.FOVLine.Origin = v end });
-SecFOVLine:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.FOVLine.Thickness = v end });
-SecFOVLine:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.FOVLine.Transparency = v end });
+SecFOVLine:AddToggle({
+    Flag = "SecFOVLine_AtivarFOVLine", Name = "Ativar FOV Line", Callback = FOVLine_SetEnabled }).Link:AddColorPicker({
+    Flag = "SecFOVLine_Cor", Default = Config.FOVLine.Color, Callback = function(v) Config.FOVLine.Color = v end });
+SecFOVLine:AddDropdown({
+    Flag = "SecFOVLine_Alvo", Name = "Alvo", Default = "Ambos", Values = {"Ambos", "Silent Aim", "Aimbot"}, Callback = function(v) Config.FOVLine.Mode = v end });
+SecFOVLine:AddDropdown({
+    Flag = "SecFOVLine_Origem", Name = "Origem", Default = "Tela", Values = {"Tela", "Mouse", "Baixo", "Cima"}, Callback = function(v) Config.FOVLine.Origin = v end });
+SecFOVLine:AddSlider({
+    Flag = "SecFOVLine_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.FOVLine.Thickness = v end });
+SecFOVLine:AddSlider({
+    Flag = "SecFOVLine_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.FOVLine.Transparency = v end });
 
 -- Seção Info
 local SecInfo = Tab:DrawSection({ Name = "Informações & Vida", Position = 'right' });
-SecInfo:AddToggle({ Name = "Mostrar Vida", Callback = function(v) Config.Life.Enabled = v end });
-SecInfo:AddDropdown({ Name = "Estilo Vida", Default = "Bar", Values = {"Bar", "Text"}, Callback = function(v) Config.Life.Type = v end });
-SecInfo:AddToggle({ Name = "Nome", Callback = function(v) Config.Info.Name = v end });
-SecInfo:AddToggle({ Name = "Distância", Callback = function(v) Config.Info.Distance = v end });
-SecInfo:AddToggle({ Name = "Item Segurado", Callback = function(v) Config.Info.Item = v end });
-SecInfo:AddSlider({ Name = "Tamanho Texto", Min = 10, Max = 30, Default = 14, Callback = function(v) Config.Info.Size = v end });
-SecInfo:AddColorPicker({ Name = "Cor do Texto", Default = Config.Info.Color, Callback = function(v) Config.Info.Color = v end });
+SecInfo:AddToggle({
+    Flag = "SecInfo_MostrarVida", Name = "Mostrar Vida", Callback = function(v) Config.Life.Enabled = v end });
+SecInfo:AddDropdown({
+    Flag = "SecInfo_EstiloVida", Name = "Estilo Vida", Default = "Bar", Values = {"Bar", "Text"}, Callback = function(v) Config.Life.Type = v end });
+SecInfo:AddToggle({
+    Flag = "SecInfo_Nome", Name = "Nome", Callback = function(v) Config.Info.Name = v end });
+SecInfo:AddToggle({
+    Flag = "SecInfo_Distncia", Name = "Distância", Callback = function(v) Config.Info.Distance = v end });
+SecInfo:AddToggle({
+    Flag = "SecInfo_ItemSegurado", Name = "Item Segurado", Callback = function(v) Config.Info.Item = v end });
+SecInfo:AddSlider({
+    Flag = "SecInfo_TamanhoTexto", Name = "Tamanho Texto", Min = 10, Max = 30, Default = 14, Callback = function(v) Config.Info.Size = v end });
+SecInfo:AddColorPicker({
+    Flag = "SecInfo_CordoTexto", Name = "Cor do Texto", Default = Config.Info.Color, Callback = function(v) Config.Info.Color = v end });
 
 -- Seção Esqueleto
 local SecSkel = Tab:DrawSection({ Name = "Esqueleto", Position = 'left' });
-SecSkel:AddToggle({ Name = "Ativar Esqueleto", Callback = function(v) Config.Skeleton.Enabled = v end }).Link:AddColorPicker({ Default = Config.Skeleton.Color, Callback = function(v) Config.Skeleton.Color = v end });
-SecSkel:AddSlider({ Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Skeleton.Thickness = v end });
-SecSkel:AddSlider({ Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Skeleton.Transparency = v end });
+SecSkel:AddToggle({
+    Flag = "SecSkel_AtivarEsqueleto", Name = "Ativar Esqueleto", Callback = function(v) Config.Skeleton.Enabled = v end }).Link:AddColorPicker({
+    Flag = "SecSkel_Cor", Default = Config.Skeleton.Color, Callback = function(v) Config.Skeleton.Color = v end });
+SecSkel:AddSlider({
+    Flag = "SecSkel_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Skeleton.Thickness = v end });
+SecSkel:AddSlider({
+    Flag = "SecSkel_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Skeleton.Transparency = v end });
 
 -- Seção RGB
 local SecRGB = Tab:DrawSection({ Name = "Efeitos RGB", Position = 'right' });
-SecRGB:AddToggle({ Name = "Ativar RGB", Callback = function(v) Config.Rainbow.Enabled = v end });
-SecRGB:AddSlider({ Name = "Velocidade", Min = 0.01, Max = 0.2, Default = 0.05, Round = 2, Callback = function(v) Config.Rainbow.Speed = v end });
-SecRGB:AddToggle({ Name = "RGB na Box", Default = true, Callback = function(v) Config.Rainbow.ApplyToBox = v end });
-SecRGB:AddToggle({ Name = "RGB no Tracer", Default = true, Callback = function(v) Config.Rainbow.ApplyToTracer = v end });
-SecRGB:AddToggle({ Name = "RGB no Texto", Default = true, Callback = function(v) Config.Rainbow.ApplyToText = v end });
-SecRGB:AddToggle({ Name = "RGB no Esqueleto", Default = true, Callback = function(v) Config.Rainbow.ApplyToSkeleton = v end });
-SecRGB:AddToggle({ Name = "RGB na FOV Line", Default = true, Callback = function(v) Config.Rainbow.ApplyToFOVLine = v end });
+SecRGB:AddToggle({
+    Flag = "SecRGB_AtivarRGB", Name = "Ativar RGB", Callback = function(v) Config.Rainbow.Enabled = v end });
+SecRGB:AddSlider({
+    Flag = "SecRGB_Velocidade", Name = "Velocidade", Min = 0.01, Max = 0.2, Default = 0.05, Round = 2, Callback = function(v) Config.Rainbow.Speed = v end });
+SecRGB:AddToggle({
+    Flag = "SecRGB_RGBnaBox", Name = "RGB na Box", Default = true, Callback = function(v) Config.Rainbow.ApplyToBox = v end });
+SecRGB:AddToggle({
+    Flag = "SecRGB_RGBnoTracer", Name = "RGB no Tracer", Default = true, Callback = function(v) Config.Rainbow.ApplyToTracer = v end });
+SecRGB:AddToggle({
+    Flag = "SecRGB_RGBnoTexto", Name = "RGB no Texto", Default = true, Callback = function(v) Config.Rainbow.ApplyToText = v end });
+SecRGB:AddToggle({
+    Flag = "SecRGB_RGBnoEsqueleto", Name = "RGB no Esqueleto", Default = true, Callback = function(v) Config.Rainbow.ApplyToSkeleton = v end });
+SecRGB:AddToggle({
+    Flag = "SecRGB_RGBnaFOVLine", Name = "RGB na FOV Line", Default = true, Callback = function(v) Config.Rainbow.ApplyToFOVLine = v end });
 
 
 
@@ -2822,6 +2945,7 @@ local VisualSection = WorldTab:DrawSection({
 
 -- TOGGLE DO FULLBRIGHT
 VisualSection:AddToggle({
+    Flag = "VisualSection_FullBright",
     Name = "FullBright",
     Description = "Ativa/Desativa o brilho máximo no jogo",
     Default = false,
@@ -3085,10 +3209,311 @@ MotionBlurSection:AddSlider({
 
 
 -- ==============================================================
+-- Aba "Botões": HUD de botões on-screen para ligar/desligar funções.
+-- Cada botão espelha o estado de um Flag do menu; clicar alterna o Flag.
+-- Layout (visibilidade + posição) é salvo em disco e recarregado no start.
+-- ==============================================================
+local ButtonTab = VisualContainer:DrawTab({
+    Name = " Botões ",
+    Type = "Single",
+    EnableScrolling = true,
+});
+
+do
+    local HttpService = game:GetService("HttpService")
+    local QuickUIS = game:GetService("UserInputService")
+    local QuickCoreGui = (gethui and gethui()) or game:GetService("CoreGui")
+    local LAYOUT_PATH = "E$34x/QuickButtons.json"
+
+    local QuickState = {
+        Size = 36,
+        Transparency = 0.15,
+        Accent = Color3.fromRGB(255, 255, 255),
+        ShowLabel = true,
+    }
+
+    local QuickDefs = {
+        { Id = "Speed",      Flag = "Movement_EnableSpeed",     Label = "SPEED" },
+        { Id = "Fly",        Flag = "Movement_Fly",             Label = "FLY" },
+        { Id = "SkyBase",    Flag = "Movement_SkyBase",         Label = "SKY" },
+        { Id = "Noclip",     Flag = "Movement_Noclip",          Label = "NOCLIP" },
+        { Id = "BunnyHop",   Flag = "BunnyHop",                 Label = "BUNNY" },
+        { Id = "InfJump",    Flag = "InfiniteJump",             Label = "INFJUMP" },
+        { Id = "Aimbot",     Flag = "Section_AtivarAimbot",     Label = "AIM" },
+        { Id = "SilentAim",  Flag = "SAConfig_AtivarSilentAim", Label = "SILENT" },
+        { Id = "Hitbox",     Flag = "Combat_HitboxEnabled",     Label = "HITBOX" },
+        { Id = "ESP",        Flag = "SecMain_AtivarESP",        Label = "ESP" },
+        { Id = "FullBright", Flag = "VisualSection_FullBright", Label = "LIGHT" },
+    }
+
+    local QuickButtons = {
+        Root = nil,
+        Registry = {},
+        Order = 0,
+    }
+
+    local function SaveLayout()
+        local out = { State = {
+            Size = QuickState.Size,
+            Transparency = QuickState.Transparency,
+            ShowLabel = QuickState.ShowLabel,
+            Accent = { R = QuickState.Accent.R, G = QuickState.Accent.G, B = QuickState.Accent.B },
+        }, Buttons = {} }
+        for id, b in pairs(QuickButtons.Registry) do
+            out.Buttons[id] = {
+                Visible = b.Frame.Visible,
+                Pos = { b.Pos.X.Scale, b.Pos.X.Offset, b.Pos.Y.Scale, b.Pos.Y.Offset },
+            }
+        end
+        pcall(function()
+            if not isfolder("E$34x") then makefolder("E$34x") end
+            writefile(LAYOUT_PATH, HttpService:JSONEncode(out))
+        end)
+    end
+
+    local function LoadLayout()
+        local ok, data = pcall(function()
+            if isfile(LAYOUT_PATH) then
+                return HttpService:JSONDecode(readfile(LAYOUT_PATH))
+            end
+            return nil
+        end)
+        if ok and type(data) == "table" then
+            if type(data.State) == "table" then
+                QuickState.Size = data.State.Size or QuickState.Size
+                QuickState.Transparency = data.State.Transparency or QuickState.Transparency
+                if data.State.ShowLabel ~= nil then QuickState.ShowLabel = data.State.ShowLabel end
+                if data.State.Accent then
+                    QuickState.Accent = Color3.new(data.State.Accent.R, data.State.Accent.G, data.State.Accent.B)
+                end
+            end
+            return data.Buttons
+        end
+        return nil
+    end
+    local function EnsureRoot()
+        if QuickButtons.Root and QuickButtons.Root.Parent then return QuickButtons.Root end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "E$34x_QuickButtons"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+        gui.DisplayOrder = 9999
+        gui.Parent = QuickCoreGui
+        QuickButtons.Root = gui
+        return gui
+    end
+
+    -- Atualiza o visual (ligado/desligado) a partir do Flag alvo.
+    local function RefreshVisual(entry)
+        local el = FiveSync.Flags[entry.Def.Flag]
+        local on = false
+        if el then
+            local ok, v = pcall(function() return el:GetValue() end)
+            on = ok and v == true
+        end
+        entry.On = on
+        local col = on and QuickState.Accent or Color3.fromRGB(70, 70, 70)
+        entry.Frame.BackgroundColor3 = col
+        entry.Frame.BackgroundTransparency = on and QuickState.Transparency or 0.4
+        entry.Stroke.Color = on and QuickState.Accent or Color3.fromRGB(90, 90, 90)
+        entry.Stroke.Transparency = on and 0 or 0.4
+        entry.Label.TextColor3 = on and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(230, 230, 230)
+    end
+
+    -- Alterna a função clicando no Flag correspondente do menu.
+    local function ToggleEntry(entry)
+        local el = FiveSync.Flags[entry.Def.Flag]
+        if not el then return end
+        local cur = el:GetValue()
+        el:SetValue(not cur)
+        RefreshVisual(entry)
+    end
+
+    function QuickButtons.Create(def, saved)
+        local root = EnsureRoot()
+        local size = QuickState.Size
+
+        local frame = Instance.new("Frame")
+        frame.Name = "QB_" .. def.Id
+        frame.Size = UDim2.fromOffset(size * 2.1, size)
+        frame.Position = UDim2.fromOffset(20, 20 + QuickButtons.Order * (size + 8))
+        frame.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+        frame.BackgroundTransparency = 0.4
+        frame.BorderSizePixel = 0
+        frame.Visible = false
+        frame.Parent = root
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(1, 0)
+        corner.Parent = frame
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.fromRGB(90, 90, 90)
+        stroke.Thickness = 1
+        stroke.Transparency = 0.4
+        stroke.Parent = frame
+
+        local label = Instance.new("TextLabel")
+        label.Name = "Label"
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamBold
+        label.Text = QuickState.ShowLabel and def.Label or ""
+        label.TextSize = 13
+        label.TextColor3 = Color3.fromRGB(230, 230, 230)
+        label.TextTransparency = 0
+        label.Parent = frame
+
+        local entry = {
+            Def = def,
+            Frame = frame,
+            Stroke = stroke,
+            Label = label,
+            Pos = frame.Position,
+            On = false,
+            DidDrag = false,
+        }
+
+        if saved then
+            frame.Visible = saved.Visible == true
+            if type(saved.Pos) == "table" then
+                entry.Pos = UDim2.new(saved.Pos[1] or 0, saved.Pos[2] or 0, saved.Pos[3] or 0, saved.Pos[4] or 0)
+                frame.Position = entry.Pos
+            end
+        end
+
+        -- Arraste (diferencia clique de arrasto por um limiar de 6px).
+        local dragStart, startPos
+        frame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragStart = input.Position
+                startPos = frame.Position
+                entry.DidDrag = false
+            end
+        end)
+        QuickUIS.InputChanged:Connect(function(input)
+            if not dragStart then return end
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                local delta = input.Position - dragStart
+                if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then entry.DidDrag = true end
+                if entry.DidDrag then
+                    entry.Pos = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                    frame.Position = entry.Pos
+                end
+            end
+        end)
+        QuickUIS.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                if dragStart and entry.DidDrag then SaveLayout() end
+                dragStart = nil
+            end
+        end)
+
+        local click = Instance.new("TextButton")
+        click.Name = "Click"
+        click.Size = UDim2.fromScale(1, 1)
+        click.BackgroundTransparency = 1
+        click.Text = ""
+        click.Parent = frame
+        click.MouseButton1Click:Connect(function()
+            if entry.DidDrag then entry.DidDrag = false; return end
+            ToggleEntry(entry)
+        end)
+
+        QuickButtons.Order = QuickButtons.Order + 1
+        QuickButtons.Registry[def.Id] = entry
+        RefreshVisual(entry)
+        return entry
+    end
+
+    function QuickButtons.ApplyStyle()
+        for _, entry in pairs(QuickButtons.Registry) do
+            entry.Frame.Size = UDim2.fromOffset(QuickState.Size * 2.1, QuickState.Size)
+            entry.Label.Text = QuickState.ShowLabel and entry.Def.Label or ""
+            RefreshVisual(entry)
+        end
+        SaveLayout()
+    end
+
+    local saved = LoadLayout()
+
+    -- Seção: quais botões aparecem na tela (cada um é um Flag do menu).
+    local QuickListSection = ButtonTab:DrawSection({ Name = "Botões na Tela", Position = "left" })
+    for _, def in ipairs(QuickDefs) do
+        QuickButtons.Create(def, saved and saved[def.Id])
+        local entry = QuickButtons.Registry[def.Id]
+        QuickListSection:AddToggle({
+            Flag = "QuickBtn_" .. def.Id,
+            Name = def.Label,
+            Default = entry.Frame.Visible,
+            Callback = function(v)
+                entry.Frame.Visible = v
+                if v then RefreshVisual(entry) end
+                SaveLayout()
+            end
+        })
+    end
+
+    -- Seção: aparência e layout.
+    local QuickCfgSection = ButtonTab:DrawSection({ Name = "Aparência", Position = "right" })
+    QuickCfgSection:AddSlider({
+        Flag = "QuickBtn_Tamanho", Name = "Tamanho", Min = 24, Max = 64, Default = QuickState.Size,
+        Callback = function(v) QuickState.Size = math.floor(v); QuickButtons.ApplyStyle() end
+    })
+    QuickCfgSection:AddSlider({
+        Flag = "QuickBtn_Transparencia", Name = "Transparência (ligado)", Min = 0, Max = 0.8, Round = 2, Default = QuickState.Transparency,
+        Callback = function(v) QuickState.Transparency = v; QuickButtons.ApplyStyle() end
+    })
+    QuickCfgSection:AddColorPicker({
+        Flag = "QuickBtn_Cor", Name = "Cor de Destaque", Default = QuickState.Accent,
+        Callback = function(c) QuickState.Accent = c; QuickButtons.ApplyStyle() end
+    })
+    QuickCfgSection:AddToggle({
+        Flag = "QuickBtn_MostrarRotulo", Name = "Mostrar Rótulo", Default = QuickState.ShowLabel,
+        Callback = function(v) QuickState.ShowLabel = v; QuickButtons.ApplyStyle() end
+    })
+    QuickCfgSection:AddButton({ Name = "Resetar Posições", Callback = function()
+        local i = 0
+        for _, entry in pairs(QuickButtons.Registry) do
+            entry.Pos = UDim2.fromOffset(20, 20 + i * (QuickState.Size + 8))
+            entry.Frame.Position = entry.Pos
+            i = i + 1
+        end
+        SaveLayout()
+    end })
+    QuickCfgSection:AddButton({ Name = "Mostrar Todos", Callback = function()
+        for _, def in ipairs(QuickDefs) do
+            local el = FiveSync.Flags["QuickBtn_" .. def.Id]
+            if el then el:SetValue(true) end
+        end
+    end })
+    QuickCfgSection:AddButton({ Name = "Ocultar Todos", Callback = function()
+        for _, def in ipairs(QuickDefs) do
+            local el = FiveSync.Flags["QuickBtn_" .. def.Id]
+            if el then el:SetValue(false) end
+        end
+    end })
+
+    -- Mantém o visual sincronizado quando a função muda por outro caminho.
+    task.spawn(function()
+        while true do
+            task.wait(0.25)
+            for _, entry in pairs(QuickButtons.Registry) do
+                if entry.Frame.Visible then RefreshVisual(entry) end
+            end
+        end
+    end)
+
+    -- Exposto para depuração/uso externo.
+    getgenv().E34x_QuickButtons = QuickButtons
+end
+
+
+-- ==============================================================
 -- Aba Misc: Settings (UI) e Temas (nomes/ícones/cores do exemplo)
 -- ==============================================================
 Window:DrawCategory({ Name = "Misc" })
-
 local SettingTab = Window:DrawTab({
     Icon = "settings-3",
     Name = "Settings",
@@ -3107,6 +3532,7 @@ local Settings = SettingTab:DrawSection({
 })
 
 Settings:AddToggle({
+    Flag = "Settings_AlwayShowFrame",
     Name = "Alway Show Frame",
     Default = false,
     Callback = function(v)
@@ -3115,6 +3541,7 @@ Settings:AddToggle({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_Highlight",
     Name = "Highlight",
     Default = FiveSync.Colors.Highlight,
     Callback = function(v)
@@ -3124,6 +3551,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_ToggleColor",
     Name = "Toggle Color",
     Default = FiveSync.Colors.Toggle,
     Callback = function(v)
@@ -3133,6 +3561,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_DropColor",
     Name = "Drop Color",
     Default = FiveSync.Colors.DropColor,
     Callback = function(v)
@@ -3142,6 +3571,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_Risky",
     Name = "Risky",
     Default = FiveSync.Colors.Risky,
     Callback = function(v)
@@ -3151,6 +3581,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_MouseEnter",
     Name = "Mouse Enter",
     Default = FiveSync.Colors.MouseEnter,
     Callback = function(v)
@@ -3160,6 +3591,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_BlockColor",
     Name = "Block Color",
     Default = FiveSync.Colors.BlockColor,
     Callback = function(v)
@@ -3169,6 +3601,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_BackgroundColor",
     Name = "Background Color",
     Default = FiveSync.Colors.BGDBColor,
     Callback = function(v)
@@ -3178,6 +3611,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_BlockBackgroundColor",
     Name = "Block Background Color",
     Default = FiveSync.Colors.BlockBackground,
     Callback = function(v)
@@ -3187,6 +3621,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_StrokeColor",
     Name = "Stroke Color",
     Default = FiveSync.Colors.StrokeColor,
     Callback = function(v)
@@ -3196,6 +3631,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_HighStrokeColor",
     Name = "High Stroke Color",
     Default = FiveSync.Colors.HighStrokeColor,
     Callback = function(v)
@@ -3205,6 +3641,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_SwitchColor",
     Name = "Switch Color",
     Default = FiveSync.Colors.SwitchColor,
     Callback = function(v)
@@ -3214,6 +3651,7 @@ Settings:AddColorPicker({
 })
 
 Settings:AddColorPicker({
+    Flag = "Settings_LineColor",
     Name = "Line Color",
     Default = FiveSync.Colors.LineColor,
     Callback = function(v)
@@ -3239,6 +3677,7 @@ Settings:AddButton({
 ThemeTab:DrawSection({
     Name = "UI Themes"
 }):AddDropdown({
+    Flag = "Theme_Select",
     Name = "Select Theme",
     Default = "Default",
     Values = {
