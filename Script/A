@@ -1,20 +1,20 @@
 
 local FiveSync = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
--- Otimização automática para mobile (detecta e liga o modo otimizado)
-if FiveSync:IsMobile() then
-    FiveSync:OptimizeMode(true, {
-        DisableBlur = true,
-        DisableHover = true,
-        DisableAnimations = true,
-        DisableDragBlacklistListener = true,
-        MainLoopDelay = 0.1,
-        KeybindsDelay = 0.1,
-        KeybindHandlerDelay = 0.05,
-        BlurDelay = 0.5,
-        ColorPickerDelay = 0.03,
-        CloseButtonDelay = 0.5,
-        ConfigRefreshDelay = 0.5,
-    })
+-- Otimização automática: em mobile liga o modo leve da lib (menos animações,
+-- blur, hover e loops mais espaçados). No desktop mantém o visual normal.
+if FiveSync:AutoOptimize({
+    DisableBlur = true,
+    DisableHover = true,
+    DisableAnimations = true,
+    DisableDragBlacklistListener = true,
+    MainLoopDelay = 0.1,
+    KeybindsDelay = 0.1,
+    KeybindHandlerDelay = 0.05,
+    BlurDelay = 0.5,
+    ColorPickerDelay = 0.03,
+    CloseButtonDelay = 0.5,
+    ConfigRefreshDelay = 0.5,
+}) then
     print("[E$34x] Mobile detectado - modo otimizado ativado.")
 else
     print("[E$34x] Desktop detectado - modo normal.")
@@ -1454,6 +1454,7 @@ local function Aimbot_SetActive(state)
         end
         FOVFrame.Visible = false
         ClearTracedLines()
+        getgenv().Aimbot_CurrentPart = nil
     end
 end
 
@@ -2038,6 +2039,7 @@ local function SA_SetActive(state)
         end
         if SA_FOVCircle then SA_FOVCircle.Visible = false end
         SA_TargetPart, SA_TargetPos = nil, nil
+        getgenv().SilentAim_CurrentPart = nil
     end
     SA_UpdateHooks()
 end
@@ -2508,6 +2510,33 @@ local function CreateDrawing(type, properties)
     end
     return drawing
 end
+
+-- bounding box do personagem com cache por frame (tick): o Box 3D e o Circle 3D
+-- pedem o mesmo dado no mesmo frame, então medimos uma vez só.
+local BBoxTick, BBoxCF, BBoxSize = -1, nil, nil
+local function CharBBox(char)
+    if BBoxTick ~= tick() then
+        BBoxTick = tick()
+        BBoxCF, BBoxSize = char:GetBoundingBox()
+    end
+    return BBoxCF, BBoxSize
+end
+
+-- Seno/cosseno do anel, pré-calculados uma vez (evita math.cos/sin por segmento).
+local CIRCLE_SEGMENTS = 24
+local CircleCos, CircleSin = {}, {}
+for i = 0, CIRCLE_SEGMENTS - 1 do
+    local a = i / CIRCLE_SEGMENTS * math.pi * 2
+    CircleCos[i] = math.cos(a)
+    CircleSin[i] = math.sin(a)
+end
+
+-- Só escreve na Drawing quando o valor realmente mudou. Como quase tudo
+-- (cor, espessura, transparência) é constante, isso elimina a maioria das
+-- escritas por frame — que é o custo real em clientes fracos.
+local function SetIf(obj, key, value)
+    if obj[key] ~= value then obj[key] = value end
+end
 -- Cor escura derivada da cor do texto, usada como sombra para dar contraste.
 local function ShadowColor(c)
     local h, s, v = Color3.toHSV(c)
@@ -2531,10 +2560,10 @@ end
 -- Aplica contorno nativo (Outline) e uma sombra opcional (segundo texto
 -- deslocado atrás do principal) ao texto do ESP.
 local function StyleText(t, color, size, transparency)
-    t.Color = color
-    t.Size = size
-    t.Transparency = transparency
-    t.Outline = Config.Info.TextOutline
+    SetIf(t, "Color", color)
+    SetIf(t, "Size", size)
+    SetIf(t, "Transparency", transparency)
+    SetIf(t, "Outline", Config.Info.TextOutline)
 
     local sh = TextShadows[t]
     if Config.Info.Shadow then
@@ -2544,10 +2573,10 @@ local function StyleText(t, color, size, transparency)
         end
         sh.Text = t.Text
         sh.Position = t.Position + Vector2.new(1, 1)
-        sh.Color = ShadowColor(color)
-        sh.Size = size
-        sh.Transparency = math.min(1, transparency + 0.15)
-        sh.Outline = false
+        SetIf(sh, "Color", ShadowColor(color))
+        SetIf(sh, "Size", size)
+        SetIf(sh, "Transparency", math.min(1, transparency + 0.15))
+        SetIf(sh, "Outline", false)
         sh.Visible = t.Visible
     elseif sh then
         sh.Visible = false
@@ -2568,17 +2597,25 @@ local function StyleTextBackground(t, size)
     local h = size + 4
     bg.Position = Vector2.new(t.Position.X - w / 2, t.Position.Y - h / 2)
     bg.Size = Vector2.new(w, h)
-    bg.Color = Config.Info.BackgroundColor
-    bg.Transparency = Config.Info.BackgroundTransparency
+    SetIf(bg, "Color", Config.Info.BackgroundColor)
+    SetIf(bg, "Transparency", Config.Info.BackgroundTransparency)
     bg.Visible = true
 end
 
 local function HideText(t)
-    t.Visible = false
+    if t.Visible then t.Visible = false end
     local sh = TextShadows[t]
-    if sh then sh.Visible = false end
+    if sh and sh.Visible then sh.Visible = false end
     local bg = TextBackgrounds[t]
-    if bg then bg.Visible = false end
+    if bg and bg.Visible then bg.Visible = false end
+end
+
+-- Esconde uma lista de Drawings sem reescrever Visible quando já está escondido
+-- (evita trabalho no estado estável, quando nada está sendo desenhado).
+local function HideList(list)
+    for _, v in pairs(list) do
+        if v.Visible then v.Visible = false end
+    end
 end
 
 local function RemoveTextShadow(t)
@@ -2670,18 +2707,6 @@ local function InitPlayerESP(player)
     
     ESP_Cache[player] = data
 end
--- Loop de Monitoramento de Limpeza (conectado apenas quando o ESP está ativo)
-local ESP_CleanConn = nil
-local function ESP_Cleanup()
-    for player, _ in pairs(ESP_Cache) do
-        local char = player.Character
-        local hum = char and char:FindFirstChild("Humanoid")
-        -- Se o player saiu, o char sumiu ou o player morreu -> LIMPA TUDO
-        if not player.Parent or not char or not hum or hum.Health <= 0 then
-            ClearESP(player)
-        end
-    end
-end
 -- Loop de Renderização (conectado apenas quando o ESP está ativo)
 local ESP_RenderConn = nil
 
@@ -2695,6 +2720,37 @@ local function GetFOVLineOrigin()
     if o == "Cima" then return Vector2.new(Camera.ViewportSize.X / 2, 0) end
     return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2) -- "Tela" (centro)
 end
+-- O alvo da FOV Line precisa passar nas MESMAS regras do aim (team check,
+-- whitelist, vida e parede). Assim a linha nunca aponta para um aliado,
+-- whitelisted ou atrás de parede, mesmo que o alvo guardado esteja desatualizado.
+local function FOVLineTargetValid(part)
+    local model = part
+    while model and model ~= workspace do
+        if model:IsA("Model") then break end
+        model = model.Parent
+    end
+    if not model or model == workspace then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    local plr = Players:GetPlayerFromCharacter(model)
+    if plr then
+        if plr == LocalPlayer then return false end
+        if getgenv().Aimbot_Whitelist[plr.Name] then return false end
+        if getgenv().Aimbot_TeamCheck and plr.Team == LocalPlayer.Team then return false end
+    end
+    -- Wall check: qualquer um dos dois modos ligado exige linha de visão.
+    local wall = getgenv().SilentAim_WallCheck or getgenv().Aimbot_WallCheck
+    if wall then
+        local ok, res = pcall(function()
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { LocalPlayer.Character, model }
+            return workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, params)
+        end)
+        if not ok or res then return false end
+    end
+    return true
+end
 local function ESP_RenderFOVLine(rainbowColor)
     if not Config.FOVLine.Enabled then
         FOVLineDraw.Visible = false
@@ -2702,18 +2758,23 @@ local function ESP_RenderFOVLine(rainbowColor)
         return
     end
 
-    -- Alvo: usa o do Silent Aim e/ou o do Aimbot conforme o modo
+    -- Alvo: só usa o do Silent Aim / Aimbot quando o modo correspondente está
+    -- ATIVO (evita apontar para um alvo antigo depois de desligar a mira).
     local part
     if Config.FOVLine.Mode == "Silent Aim" then
-        part = getgenv().SilentAim_CurrentPart
+        if getgenv().SilentAim_Ativo then part = getgenv().SilentAim_CurrentPart end
     elseif Config.FOVLine.Mode == "Aimbot" then
-        part = getgenv().Aimbot_CurrentPart
+        if getgenv().Aimbot_Ativo then part = getgenv().Aimbot_CurrentPart end
     else
-        part = getgenv().SilentAim_CurrentPart or getgenv().Aimbot_CurrentPart
+        if getgenv().SilentAim_Ativo then part = getgenv().SilentAim_CurrentPart end
+        if not part and getgenv().Aimbot_Ativo then part = getgenv().Aimbot_CurrentPart end
     end
 
-    -- Só mostra quando um alvo é definido; mantém o último ponto se a parte sumir
-    if part and part.Parent then FOVLineFrom = part.Position end
+    if part and part.Parent and FOVLineTargetValid(part) then
+        FOVLineFrom = part.Position
+    else
+        FOVLineFrom = nil
+    end
     if not FOVLineFrom then FOVLineDraw.Visible = false; return end
 
     local pos, onScreen = Camera:WorldToViewportPoint(FOVLineFrom)
@@ -2722,9 +2783,9 @@ local function ESP_RenderFOVLine(rainbowColor)
     local origin = GetFOVLineOrigin()
     FOVLineDraw.From = origin
     FOVLineDraw.To = Vector2.new(pos.X, pos.Y)
-    FOVLineDraw.Color = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToFOVLine) and rainbowColor or Config.FOVLine.Color
-    FOVLineDraw.Thickness = Config.FOVLine.Thickness
-    FOVLineDraw.Transparency = Config.FOVLine.Transparency
+    SetIf(FOVLineDraw, "Color", (Config.Rainbow.Enabled and Config.Rainbow.ApplyToFOVLine) and rainbowColor or Config.FOVLine.Color)
+    SetIf(FOVLineDraw, "Thickness", Config.FOVLine.Thickness)
+    SetIf(FOVLineDraw, "Transparency", Config.FOVLine.Transparency)
     FOVLineDraw.Visible = true
 end
 
@@ -2744,7 +2805,9 @@ local function DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
         local stepH = height / steps
         local gTop = Config.Box.GradientTransparency
         local gBot = 1
-        data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, gTop, true
+        SetIf(data.BoxFill, "Color", fillColor)
+        SetIf(data.BoxFill, "Transparency", gTop)
+        data.BoxFill.Visible = true
         data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
         for st = 1, steps do
             local tt = (st - 1) / (steps - 1)
@@ -2752,13 +2815,15 @@ local function DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
             if not g then g = CreateDrawing("Square", { Filled = true, Visible = false }); data.BoxGradient["Step"..st] = g end
             g.Position = Vector2.new(x, y + (st - 1) * stepH)
             g.Size = Vector2.new(width, stepH + 1)
-            g.Color = fillColor:Lerp(gColor, tt)
-            g.Transparency = gTop + (gBot - gTop) * tt
+            SetIf(g, "Color", fillColor:Lerp(gColor, tt))
+            SetIf(g, "Transparency", gTop + (gBot - gTop) * tt)
             g.Visible = true
         end
     else
         data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
-        data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, Config.Box.FillTransparency, true
+        SetIf(data.BoxFill, "Color", fillColor)
+        SetIf(data.BoxFill, "Transparency", Config.Box.FillTransparency)
+        data.BoxFill.Visible = true
         for _, g in pairs(data.BoxGradient) do g.Visible = false end
     end
 end
@@ -2779,27 +2844,25 @@ local function Draw3DFill(data, pts, fillColor)
         local q = data.Box3DFill[i]
         if not q then q = CreateDrawing("Quad", { Filled = true, Visible = false }); data.Box3DFill[i] = q end
         q.PointA, q.PointB, q.PointC, q.PointD = pts[f[1]], pts[f[2]], pts[f[3]], pts[f[4]]
-        q.Color, q.Transparency, q.Visible = fillColor, Config.Box.FillTransparency, true
+        SetIf(q, "Color", fillColor)
+        SetIf(q, "Transparency", Config.Box.FillTransparency)
+        q.Visible = true
     end
 end
-
--- Número de segmentos do anel do Circle ESP 3D (quanto maior, mais suave).
-local CIRCLE_SEGMENTS = 32
 
 -- Desenha o Circle ESP como um anel horizontal no chão, projetado a partir do
 -- mundo (como o Box 3D). O anel fica sempre no plano XZ, então acompanha a
 -- perspectiva e o personagem permanece dentro dele, independente da câmera.
 -- Quando "Preenchido" está ligado, preenche o disco com um leque de triângulos.
 local function DrawCircle3D(data, char, color)
-    local cf, size = char:GetBoundingBox()
+    local cf, size = CharBBox(char)
     local feetY = cf.Position.Y - size.Y / 2 + 0.05
     local radius = math.max(size.X, size.Z) / 2
     local cx, cz = cf.Position.X, cf.Position.Z
 
     local pts, anyOn = {}, false
     for i = 1, CIRCLE_SEGMENTS do
-        local ang = (i - 1) / CIRCLE_SEGMENTS * math.pi * 2
-        local wp = Vector3.new(cx + math.cos(ang) * radius, feetY, cz + math.sin(ang) * radius)
+        local wp = Vector3.new(cx + CircleCos[i - 1] * radius, feetY, cz + CircleSin[i - 1] * radius)
         local vp, on = Camera:WorldToViewportPoint(wp)
         pts[i] = Vector2.new(vp.X, vp.Y)
         if on and vp.Z > 0 then anyOn = true end
@@ -2810,7 +2873,10 @@ local function DrawCircle3D(data, char, color)
         if not l then l = CreateDrawing("Line", { Thickness = 1, Visible = false, Transparency = 1 }); data.Circle3D[i] = l end
         local j = i % CIRCLE_SEGMENTS + 1
         l.From, l.To = pts[i], pts[j]
-        l.Color, l.Thickness, l.Transparency, l.Visible = color, Config.Circle.Thickness, Config.Circle.Transparency, anyOn
+        SetIf(l, "Color", color)
+        SetIf(l, "Thickness", Config.Circle.Thickness)
+        SetIf(l, "Transparency", Config.Circle.Transparency)
+        l.Visible = anyOn
     end
 
     if Config.Circle.Filled then
@@ -2821,7 +2887,9 @@ local function DrawCircle3D(data, char, color)
             if not tri then tri = CreateDrawing("Triangle", { Filled = true, Visible = false }); data.Circle3DFill[i] = tri end
             local j = i % CIRCLE_SEGMENTS + 1
             tri.PointA, tri.PointB, tri.PointC = center, pts[i], pts[j]
-            tri.Color, tri.Transparency, tri.Visible = color, Config.Circle.Transparency, (anyOn and centerOn)
+            SetIf(tri, "Color", color)
+            SetIf(tri, "Transparency", Config.Circle.Transparency)
+            tri.Visible = anyOn and centerOn
         end
     else
         for _, tri in pairs(data.Circle3DFill) do tri.Visible = false end
@@ -2836,7 +2904,7 @@ local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillC
         data.BoxFill.Visible = false
         for _, g in pairs(data.BoxGradient) do g.Visible = false end
 
-        local cf, size = char:GetBoundingBox()
+        local cf, size = CharBBox(char)
         local hx, hy, hz = size.X / 2, size.Y / 2, size.Z / 2
         local signs = {
             {-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1},
@@ -2857,7 +2925,10 @@ local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillC
         for i, e in ipairs(edges) do
             local l = data.Box3D[i]
             l.From, l.To = pts[e[1]], pts[e[2]]
-            l.Color, l.Thickness, l.Transparency, l.Visible = boxColor, Config.Box.Thickness, Config.Box.Transparency, anyOn
+            SetIf(l, "Color", boxColor)
+            SetIf(l, "Thickness", Config.Box.Thickness)
+            SetIf(l, "Transparency", Config.Box.Transparency)
+            l.Visible = anyOn
         end
         Draw3DFill(data, pts, fillColor)
     else
@@ -2871,7 +2942,10 @@ local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillC
             data.Box.Line4.From, data.Box.Line4.To = Vector2.new(x, y + height), Vector2.new(x + width, y + height)
             for i = 1, 4 do
                 local l = data.Box["Line"..i]
-                l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency
+                SetIf(l, "Color", boxColor)
+                SetIf(l, "Thickness", Config.Box.Thickness)
+                SetIf(l, "Transparency", Config.Box.Transparency)
+                l.Visible = true
             end
             for i = 5, 8 do data.Box["Line"..i].Visible = false end
             DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
@@ -2887,47 +2961,56 @@ local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillC
             data.Box.Line8.From, data.Box.Line8.To = Vector2.new(x + width, y + height), Vector2.new(x + width, y + height - cl)
             for i = 1, 8 do
                 local l = data.Box["Line"..i]
-                l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency
+                SetIf(l, "Color", boxColor)
+                SetIf(l, "Thickness", Config.Box.Thickness)
+                SetIf(l, "Transparency", Config.Box.Transparency)
+                l.Visible = true
             end
             DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
         end
     end
 end
 
+-- Esconde um "data" inteiro (usado quando o jogador sai da tela/distância).
+local function HideData(data)
+    HideList(data.Box)
+    if data.BoxFill.Visible then data.BoxFill.Visible = false end
+    HideList(data.BoxGradient)
+    if data.Tracer.Visible then data.Tracer.Visible = false end
+    if data.HealthBar.Visible then data.HealthBar.Visible = false end
+    if data.HealthBarOutline.Visible then data.HealthBarOutline.Visible = false end
+    if data.HealthBarBackground.Visible then data.HealthBarBackground.Visible = false end
+    HideText(data.Name); HideText(data.Distance); HideText(data.Item); HideText(data.HealthText)
+    HideList(data.Skeleton)
+    HideList(data.Box3D)
+    HideList(data.Box3DFill)
+    if data.Arrow.Visible then data.Arrow.Visible = false end
+    HideList(data.Circle3D)
+    HideList(data.Circle3DFill)
+end
+
 local function ESP_HideAll()
     for _, data in pairs(ESP_Cache) do
-        pcall(function()
-            for _, v in pairs(data.Box) do v.Visible = false end
-            if data.BoxFill then data.BoxFill.Visible = false end
-            if data.BoxGradient then for _, g in pairs(data.BoxGradient) do g.Visible = false end end
-            if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
-            data.Tracer.Visible = false
-            HideText(data.Name)
-            HideText(data.Distance)
-            HideText(data.Item)
-            HideText(data.HealthText)
-            data.HealthBar.Visible = false
-            data.HealthBarOutline.Visible = false
-            if data.HealthBarBackground then data.HealthBarBackground.Visible = false end
-            if data.Arrow then data.Arrow.Visible = false end
-            if data.Circle3D then for _, l in pairs(data.Circle3D) do l.Visible = false end end
-            if data.Circle3DFill then for _, q in pairs(data.Circle3DFill) do q.Visible = false end end
-            for _, v in pairs(data.Skeleton) do v.Visible = false end
-        end)
+        pcall(HideData, data)
     end
 end
-local function ESP_Render()
-    if Config.Rainbow.Enabled then rainbowHue = (rainbowHue + Config.Rainbow.Speed) % 1 end
-    local rainbowColor = Color3.fromHSV(rainbowHue, 1, 1)
 
-    if not Config.Enabled and not Config.FOVLine.Enabled then
-        ESP_HideAll()
-        FOVLineDraw.Visible = false
-        FOVLineFrom = nil
+local function ESP_Render()
+    if not Config.Enabled then
+        -- FOV Line é independente do ESP; o ESP em si nem é tocado.
+        if Config.FOVLine.Enabled then
+            if Config.Rainbow.Enabled then rainbowHue = (rainbowHue + Config.Rainbow.Speed) % 1 end
+            ESP_RenderFOVLine(Color3.fromHSV(rainbowHue, 1, 1))
+        else
+            FOVLineDraw.Visible = false
+            FOVLineFrom = nil
+        end
         return
     end
 
-    -- // FOV Line (independe de haver players com ESP)
+    if Config.Rainbow.Enabled then rainbowHue = (rainbowHue + Config.Rainbow.Speed) % 1 end
+    local rainbowColor = Color3.fromHSV(rainbowHue, 1, 1)
+
     if Config.FOVLine.Enabled then
         ESP_RenderFOVLine(rainbowColor)
     else
@@ -2935,205 +3018,223 @@ local function ESP_Render()
         FOVLineFrom = nil
     end
 
-    if not Config.Enabled then return end
+    -- Cores base computadas uma vez por frame (não por jogador).
+    local rb = Config.Rainbow.Enabled
+    local boxColor = (rb and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.Color
+    local fillColor = (rb and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.FillColor
+    local textColor = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Info.Color
+    local skelColor = (rb and Config.Rainbow.ApplyToSkeleton) and rainbowColor or Config.Skeleton.Color
+    local tracerColor = (rb and Config.Rainbow.ApplyToTracer) and rainbowColor or Config.Tracer.Color
+    local circleColor = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Circle.Color
 
-    for _, player in ipairs(Players:GetPlayers()) do
-        -- Ignorar Self se configurado
-        if not Config.SelfESP and player == LocalPlayer then continue end
-        
+    local camPos = Camera.CFrame.Position
+    local maxDist = Config.MaxDistance
+    local showLife = Config.Life.Enabled
+    local lifeBar = showLife and Config.Life.Type == "Bar"
+    local showName, showDist, showItem = Config.Info.Name, Config.Info.Distance, Config.Info.Item
+    local showSkel = Config.Skeleton.Enabled
+
+    local players = Players:GetPlayers()
+    local seen = {}
+    for i = 1, #players do
+        local player = players[i]
+        seen[player] = true
+
         local char = player.Character
         local hum = char and char:FindFirstChild("Humanoid")
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        
-        -- Verificação básica de validade
-        if not char or not hum or not hrp or hum.Health <= 0 then continue end
-        if Config.TeamCheck and player.Team == LocalPlayer.Team and player ~= LocalPlayer then continue end
 
-        -- Inicializa se necessário
+        -- Limpa e esquece quem saiu da cena (morte/saída), em vez de checar depois.
+        if not char or not hum or not hrp or hum.Health <= 0 then
+            if ESP_Cache[player] then ClearESP(player) end
+            continue
+        end
+
+        local skip = (not Config.SelfESP and player == LocalPlayer)
+            or (Config.TeamCheck and player ~= LocalPlayer and player.Team == LocalPlayer.Team)
+        if skip then
+            local data = ESP_Cache[player]
+            if data then HideData(data) end
+            continue
+        end
+
+        local head = char:FindFirstChild("Head")
+        if not head then
+            local data = ESP_Cache[player]
+            if data then HideData(data) end
+            continue
+        end
+
+        local distance = (camPos - hrp.Position).Magnitude
+        if distance > maxDist then
+            local data = ESP_Cache[player]
+            if data then HideData(data) end
+            continue
+        end
+
+        local headPos, onScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+        if not onScreen then
+            local data = ESP_Cache[player]
+            if data then HideData(data) end
+            continue
+        end
+
         if not ESP_Cache[player] then InitPlayerESP(player) end
         local data = ESP_Cache[player]
-        
-        pcall(function()
-            local head = char:FindFirstChild("Head")
-            if not head then return end
-            
-            local headPos, onScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-            local footPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, hum.HipHeight + (hrp.Size.Y / 2) + 0.5, 0))
-            local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
 
-            if onScreen and distance <= Config.MaxDistance then
-                local height = math.abs(headPos.Y - footPos.Y)
-                local width = height / 2
-                local x, y = headPos.X - width / 2, headPos.Y
-                
-                -- Cores Dinâmicas
-                local boxColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.Color
-                local fillColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.FillColor
-                local textColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Info.Color
-                local skelColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToSkeleton) and rainbowColor or Config.Skeleton.Color
-                local tracerColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToTracer) and rainbowColor or Config.Tracer.Color
+        local footPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, hum.HipHeight + (hrp.Size.Y / 2) + 0.5, 0))
+        local height = math.abs(headPos.Y - footPos.Y)
+        local width = height / 2
+        local x, y = headPos.X - width / 2, headPos.Y
 
-                -- Box Render
-                if Config.Box.Enabled then
-                    DrawESPBox(data, Config.Box.Type, char, x, y, width, height, boxColor, fillColor, rainbowColor)
-                else
-                    for i = 1, 8 do data.Box["Line"..i].Visible = false end
-                    data.BoxFill.Visible = false
-                    for _, g in pairs(data.BoxGradient) do g.Visible = false end
-                    if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
-                    if data.Box3DFill then for _, q in pairs(data.Box3DFill) do q.Visible = false end end
-                end
+        if Config.Box.Enabled then
+            DrawESPBox(data, Config.Box.Type, char, x, y, width, height, boxColor, fillColor, rainbowColor)
+        else
+            for j = 1, 8 do local l = data.Box["Line"..j]; if l.Visible then l.Visible = false end end
+            if data.BoxFill.Visible then data.BoxFill.Visible = false end
+            HideList(data.BoxGradient)
+            HideList(data.Box3D)
+            HideList(data.Box3DFill)
+        end
 
-                -- Seta ESP (triângulo preenchido apontando para a cabeça)
-                if Config.Arrow.Enabled then
-                    local asz = Config.Arrow.Size
-                    local tip = Vector2.new(headPos.X, headPos.Y - Config.Arrow.Gap)
-                    local bl = Vector2.new(headPos.X - asz / 2, tip.Y - asz)
-                    local br = Vector2.new(headPos.X + asz / 2, tip.Y - asz)
-                    data.Arrow.PointA, data.Arrow.PointB, data.Arrow.PointC = tip, bl, br
-                    data.Arrow.Color = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Arrow.Color
-                    data.Arrow.Transparency = Config.Arrow.Transparency
-                    data.Arrow.Filled = true
-                    data.Arrow.Visible = true
-                else data.Arrow.Visible = false end
+        if Config.Arrow.Enabled then
+            local asz = Config.Arrow.Size
+            local tip = Vector2.new(headPos.X, headPos.Y - Config.Arrow.Gap)
+            data.Arrow.PointA = tip
+            data.Arrow.PointB = Vector2.new(headPos.X - asz / 2, tip.Y - asz)
+            data.Arrow.PointC = Vector2.new(headPos.X + asz / 2, tip.Y - asz)
+            SetIf(data.Arrow, "Color", (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Arrow.Color)
+            SetIf(data.Arrow, "Transparency", Config.Arrow.Transparency)
+            data.Arrow.Filled = true
+            data.Arrow.Visible = true
+        elseif data.Arrow.Visible then data.Arrow.Visible = false end
 
-                -- Circle ESP 3D: anel horizontal no chão, projetado do mundo
-                if Config.Circle.Enabled then
-                    DrawCircle3D(data, char, (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Circle.Color)
-                else
-                    for _, l in pairs(data.Circle3D) do l.Visible = false end
-                    for _, tri in pairs(data.Circle3DFill) do tri.Visible = false end
-                end
+        if Config.Circle.Enabled then
+            DrawCircle3D(data, char, circleColor)
+        else
+            HideList(data.Circle3D)
+            HideList(data.Circle3DFill)
+        end
 
-                -- Tracer Render
-                if Config.Tracer.Enabled then
-                    local origin = Config.Tracer.Origin == "Top" and Vector2.new(Camera.ViewportSize.X/2, 0) or Config.Tracer.Origin == "Bottom" and Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y) or UserInputService:GetMouseLocation()
-                    data.Tracer.From, data.Tracer.To, data.Tracer.Color, data.Tracer.Thickness, data.Tracer.Transparency, data.Tracer.Visible = origin, Vector2.new(headPos.X, headPos.Y + height/2), tracerColor, Config.Tracer.Thickness, Config.Tracer.Transparency, true
-                else data.Tracer.Visible = false end
+        if Config.Tracer.Enabled then
+            local origin = Config.Tracer.Origin == "Top" and Vector2.new(Camera.ViewportSize.X/2, 0) or Config.Tracer.Origin == "Bottom" and Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y) or UserInputService:GetMouseLocation()
+            data.Tracer.From, data.Tracer.To = origin, Vector2.new(headPos.X, headPos.Y + height/2)
+            SetIf(data.Tracer, "Color", tracerColor)
+            SetIf(data.Tracer, "Thickness", Config.Tracer.Thickness)
+            SetIf(data.Tracer, "Transparency", Config.Tracer.Transparency)
+            data.Tracer.Visible = true
+        elseif data.Tracer.Visible then data.Tracer.Visible = false end
 
-                -- Info Render
-                -- Layout: acima da box -> Nome, Vida (modo texto);
-                --         abaixo da box -> Arma, Distância.
-                local scale = Config.DynamicScaling and math.max(0.4, 1 - (distance/Config.MaxDistance)) or 1
-                local ts = Config.Info.Size * scale
-                local topOff = y - 5
-                local botOff = y + height + 5
+        -- Layout: acima da box -> Nome, Vida (modo texto); abaixo -> Arma, Distância.
+        local scale = Config.DynamicScaling and math.max(0.4, 1 - (distance/maxDist)) or 1
+        local ts = Config.Info.Size * scale
+        local topOff = y - 5
+        local botOff = y + height + 5
 
-                -- Acima da box: Nome no topo e Vida (modo texto) logo abaixo,
-                -- mais perto da box. A Vida é posicionada primeiro e o Nome
-                -- ocupa a linha de cima.
-                if Config.Life.Enabled and Config.Life.Type == "Text" then
-                    data.HealthText.Text = math.floor(hum.Health).." HP"
-                    data.HealthText.Position = Vector2.new(headPos.X, topOff - ts)
-                    data.HealthText.Visible = true
-                    StyleText(data.HealthText, textColor, ts, Config.Life.Transparency)
-                    StyleTextBackground(data.HealthText, ts)
-                    topOff = topOff - ts - 2
-                else HideText(data.HealthText) end
+        if showLife and Config.Life.Type == "Text" then
+            data.HealthText.Text = math.floor(hum.Health).." HP"
+            data.HealthText.Position = Vector2.new(headPos.X, topOff - ts)
+            data.HealthText.Visible = true
+            StyleText(data.HealthText, textColor, ts, Config.Life.Transparency)
+            StyleTextBackground(data.HealthText, ts)
+            topOff = topOff - ts - 2
+        else HideText(data.HealthText) end
 
-                if Config.Info.Name then
-                    data.Name.Text = player.DisplayName or player.Name
-                    data.Name.Position = Vector2.new(headPos.X, topOff - ts)
-                    data.Name.Visible = true
-                    StyleText(data.Name, textColor, ts, Config.Info.Transparency)
-                    StyleTextBackground(data.Name, ts)
-                    topOff = topOff - ts - 2
-                else HideText(data.Name) end
+        if showName then
+            data.Name.Text = player.DisplayName or player.Name
+            data.Name.Position = Vector2.new(headPos.X, topOff - ts)
+            data.Name.Visible = true
+            StyleText(data.Name, textColor, ts, Config.Info.Transparency)
+            StyleTextBackground(data.Name, ts)
+            topOff = topOff - ts - 2
+        else HideText(data.Name) end
 
-                if Config.Info.Item then
-                    local tool = char:FindFirstChildOfClass("Tool") or player.Backpack:FindFirstChildOfClass("Tool")
-                    if tool then
-                        data.Item.Text = tool.Name
-                        data.Item.Position = Vector2.new(headPos.X, botOff + ts)
-                        data.Item.Visible = true
-                        StyleText(data.Item, textColor, ts, Config.Info.Transparency)
-                        StyleTextBackground(data.Item, ts)
-                        botOff = botOff + ts + 2
-                    else HideText(data.Item) end
-                else HideText(data.Item) end
+        if showItem then
+            local tool = char:FindFirstChildOfClass("Tool") or (player.Backpack and player.Backpack:FindFirstChildOfClass("Tool"))
+            if tool then
+                data.Item.Text = tool.Name
+                data.Item.Position = Vector2.new(headPos.X, botOff + ts)
+                data.Item.Visible = true
+                StyleText(data.Item, textColor, ts, Config.Info.Transparency)
+                StyleTextBackground(data.Item, ts)
+                botOff = botOff + ts + 2
+            else HideText(data.Item) end
+        else HideText(data.Item) end
 
-                if Config.Info.Distance then
-                    data.Distance.Text = string.format("%dM", math.floor(distance))
-                    data.Distance.Position = Vector2.new(headPos.X, botOff + ts)
-                    data.Distance.Visible = true
-                    StyleText(data.Distance, textColor, ts, Config.Info.Transparency)
-                    StyleTextBackground(data.Distance, ts)
-                    botOff = botOff + ts + 2
-                else HideText(data.Distance) end
+        if showDist then
+            data.Distance.Text = string.format("%dM", math.floor(distance))
+            data.Distance.Position = Vector2.new(headPos.X, botOff + ts)
+            data.Distance.Visible = true
+            StyleText(data.Distance, textColor, ts, Config.Info.Transparency)
+            StyleTextBackground(data.Distance, ts)
+            botOff = botOff + ts + 2
+        else HideText(data.Distance) end
 
-                -- Life Render (barra ao lado da box; o texto foi tratado acima)
-                if Config.Life.Enabled then
-                    local hp = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
-                    if Config.Life.Type == "Bar" then
-                        data.HealthBarOutline.Position, data.HealthBarOutline.Size, data.HealthBarOutline.Transparency, data.HealthBarOutline.Visible = Vector2.new(x - 7, y), Vector2.new(5, height), Config.Life.Transparency, true
-                        data.HealthBarBackground.Position, data.HealthBarBackground.Size, data.HealthBarBackground.Transparency, data.HealthBarBackground.Visible = Vector2.new(x - 6, y + 1), Vector2.new(3, height - 2), 0.7, true
-                        data.HealthBar.Position, data.HealthBar.Size, data.HealthBar.Color, data.HealthBar.Transparency, data.HealthBar.Visible = Vector2.new(x - 6, y + 1 + ((height - 2) * (1 - hp))), Vector2.new(3, (height - 2) * hp), Color3.fromRGB(255,0,0):lerp(Color3.fromRGB(0,255,0), hp), Config.Life.Transparency, true
-                    else
-                        data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
-                    end
-                else
-                    data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
-                end
-
-                -- Skeleton Render
-                if Config.Skeleton.Enabled then
-                    local connections = bodyConnections[hum.RigType.Name]
-                    if connections then
-                        if #data.Skeleton == 0 then for _=1, #connections do table.insert(data.Skeleton, CreateDrawing("Line", {Thickness = Config.Skeleton.Thickness, Visible = false})) end end
-                        for i, conn in ipairs(connections) do
-                            local pA, pB = char:FindFirstChild(conn[1]), char:FindFirstChild(conn[2])
-                            if pA and pB then
-                                local vA, oA = Camera:WorldToViewportPoint(pA.Position)
-                                local vB, oB = Camera:WorldToViewportPoint(pB.Position)
-                                if oA and oB then 
-                                    local l = data.Skeleton[i]
-                                    l.From, l.To, l.Color, l.Thickness, l.Transparency, l.Visible = Vector2.new(vA.X, vA.Y), Vector2.new(vB.X, vB.Y), skelColor, Config.Skeleton.Thickness, Config.Skeleton.Transparency, true 
-                                else data.Skeleton[i].Visible = false end
-                            else data.Skeleton[i].Visible = false end
-                        end
-                    end
-                else for _, v in pairs(data.Skeleton) do v.Visible = false end end
-            else
-                -- Fora da tela ou distância
-                for _, v in pairs(data.Box) do v.Visible = false end
-                data.BoxFill.Visible = false
-                for _, g in pairs(data.BoxGradient) do g.Visible = false end
-                data.Tracer.Visible, data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false, false
-                for _, t in ipairs({ data.Name, data.Distance, data.Item, data.HealthText }) do HideText(t) end
-                for _, v in pairs(data.Skeleton) do v.Visible = false end
-                if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
-                if data.Box3DFill then for _, q in pairs(data.Box3DFill) do q.Visible = false end end
-                if data.Arrow then data.Arrow.Visible = false end
-                if data.Circle3D then for _, l in pairs(data.Circle3D) do l.Visible = false end end
-                if data.Circle3DFill then for _, q in pairs(data.Circle3DFill) do q.Visible = false end end
+        if showLife then
+            if lifeBar then
+                local hp = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+                data.HealthBarOutline.Position = Vector2.new(x - 7, y)
+                data.HealthBarOutline.Size = Vector2.new(5, height)
+                SetIf(data.HealthBarOutline, "Transparency", Config.Life.Transparency)
+                data.HealthBarOutline.Visible = true
+                data.HealthBarBackground.Position = Vector2.new(x - 6, y + 1)
+                data.HealthBarBackground.Size = Vector2.new(3, height - 2)
+                data.HealthBarBackground.Visible = true
+                data.HealthBar.Position = Vector2.new(x - 6, y + 1 + ((height - 2) * (1 - hp)))
+                data.HealthBar.Size = Vector2.new(3, (height - 2) * hp)
+                SetIf(data.HealthBar, "Color", Color3.fromRGB(255,0,0):Lerp(Color3.fromRGB(0,255,0), hp))
+                SetIf(data.HealthBar, "Transparency", Config.Life.Transparency)
+                data.HealthBar.Visible = true
+            elseif data.HealthBar.Visible then
+                data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
             end
-        end)
+        elseif data.HealthBar.Visible then
+            data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
+        end
+
+        if showSkel then
+            local connections = bodyConnections[hum.RigType.Name]
+            if connections then
+                if #data.Skeleton == 0 then for _=1, #connections do table.insert(data.Skeleton, CreateDrawing("Line", {Thickness = Config.Skeleton.Thickness, Visible = false})) end end
+                -- Vários ossos compartilham a mesma parte; projeta cada parte uma vez.
+                local pcache = {}
+                for ci, conn in ipairs(connections) do
+                    local pA, pB = char:FindFirstChild(conn[1]), char:FindFirstChild(conn[2])
+                    local a, oA, b, oB
+                    if pA then a = pcache[pA]; if not a then a = {Camera:WorldToViewportPoint(pA.Position)}; pcache[pA] = a end; oA = a[2] end
+                    if pB then b = pcache[pB]; if not b then b = {Camera:WorldToViewportPoint(pB.Position)}; pcache[pB] = b end; oB = b[2] end
+                    if a and b and oA and oB then
+                        local l = data.Skeleton[ci]
+                        l.From, l.To = Vector2.new(a[1].X, a[1].Y), Vector2.new(b[1].X, b[1].Y)
+                        SetIf(l, "Color", skelColor)
+                        SetIf(l, "Thickness", Config.Skeleton.Thickness)
+                        SetIf(l, "Transparency", Config.Skeleton.Transparency)
+                        l.Visible = true
+                    else data.Skeleton[ci].Visible = false end
+                end
+            end
+        else HideList(data.Skeleton) end
+    end
+
+    -- Jogadores que saíram do servidor: limpa o cache remanescente.
+    for player in pairs(ESP_Cache) do
+        if not seen[player] then ClearESP(player) end
     end
 end
 
--- Conecta/desconecta o loop conforme ESP e/ou FOV Line estejam ativos
+-- Conecta/desconecta o loop conforme ESP e/ou FOV Line estejam ativos.
+-- A limpeza de mortos/saídos roda dentro do próprio render (mais barato que um
+-- Heartbeat separado), então só existe um laço aqui.
 local function ESP_UpdateLoop()
     local want = Config.Enabled or Config.FOVLine.Enabled
     if want then
         if not ESP_RenderConn then
             ESP_RenderConn = RunService.RenderStepped:Connect(ESP_Render)
         end
-        if Config.Enabled then
-            if not ESP_CleanConn then
-                ESP_CleanConn = RunService.Heartbeat:Connect(ESP_Cleanup)
-            end
-        elseif ESP_CleanConn then
-            ESP_CleanConn:Disconnect()
-            ESP_CleanConn = nil
-        end
     else
         if ESP_RenderConn then
             ESP_RenderConn:Disconnect()
             ESP_RenderConn = nil
-        end
-        if ESP_CleanConn then
-            ESP_CleanConn:Disconnect()
-            ESP_CleanConn = nil
         end
         ESP_HideAll()
         FOVLineDraw.Visible = false
