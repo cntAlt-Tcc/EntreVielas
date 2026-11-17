@@ -3327,6 +3327,7 @@ do
         if not el then return end
         local cur = el:GetValue()
         el:SetValue(not cur)
+        FiveSync:_PlaySound(cur and "ToggleOff" or "ToggleOn")
         RefreshVisual(entry)
     end
 
@@ -3383,21 +3384,47 @@ do
             end
         end
 
-        -- Arraste (diferencia clique de arrasto por um limiar de 6px).
-        local dragStart, startPos
-        frame.InputBegan:Connect(function(input)
+        local click = Instance.new("TextButton")
+        click.Name = "Click"
+        click.Size = UDim2.fromScale(1, 1)
+        click.BackgroundTransparency = 1
+        click.Text = ""
+        click.ZIndex = frame.ZIndex + 1
+        click.Parent = frame
+
+        -- Um clique curto alterna a função; manter pressionado por >= HOLD
+        -- segundos (ou mover o mouse) inicia o arraste do botão.
+        local HOLD = 3
+        local dragStart, startPos, dragArmed, dragging, downAt
+        local function StopDrag()
+            if dragging then SaveLayout() end
+            dragStart, dragArmed, dragging, downAt = nil, false, false, nil
+        end
+        click.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                 dragStart = input.Position
                 startPos = frame.Position
+                downAt = os.clock()
+                dragArmed, dragging = false, false
                 entry.DidDrag = false
+            end
+        end)
+        click.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                local wasDrag = entry.DidDrag
+                StopDrag()
+                if not wasDrag then ToggleEntry(entry) end
             end
         end)
         QuickUIS.InputChanged:Connect(function(input)
             if not dragStart then return end
             if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
                 local delta = input.Position - dragStart
-                if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then entry.DidDrag = true end
-                if entry.DidDrag then
+                local moved = math.abs(delta.X) > 6 or math.abs(delta.Y) > 6
+                if (downAt and os.clock() - downAt >= HOLD) or moved then dragArmed = true end
+                if dragArmed then
+                    dragging = true
+                    entry.DidDrag = true
                     entry.Pos = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
                     frame.Position = entry.Pos
                 end
@@ -3405,21 +3432,11 @@ do
         end)
         QuickUIS.InputEnded:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                if dragStart and entry.DidDrag then SaveLayout() end
-                dragStart = nil
+                if dragStart then StopDrag() end
             end
         end)
 
-        local click = Instance.new("TextButton")
-        click.Name = "Click"
-        click.Size = UDim2.fromScale(1, 1)
-        click.BackgroundTransparency = 1
-        click.Text = ""
-        click.Parent = frame
-        click.MouseButton1Click:Connect(function()
-            if entry.DidDrag then entry.DidDrag = false; return end
-            ToggleEntry(entry)
-        end)
+        entry.Click = click
 
         QuickButtons.Order = QuickButtons.Order + 1
         QuickButtons.Registry[def.Id] = entry
