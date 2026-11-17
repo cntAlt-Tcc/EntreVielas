@@ -282,6 +282,16 @@ MovementSection:AddDropdown({
         end
     end
 })
+-- Uma notificação só depois que o slider para de mudar (evita 20 avisos por arrasto).
+local NotifySpeedDebounced = FiveSync:Debounce(0.25, function(value)
+    Notifier.new({
+        Title = "Speed",
+        Content = "Velocidade Ajustada: " .. tostring(value),
+        Duration = 1.5,
+        Icon = "rbxassetid://117056629401480"
+    })
+end)
+
 SliderSpeedAPI = MovementSection:AddSlider({
     Name = "Speed Force",
     Default = SpeedValue,
@@ -303,12 +313,7 @@ SliderSpeedAPI = MovementSection:AddSlider({
 
         ApplySpeed()
 
-        Notifier.new({
-            Title = "Speed",
-            Content = "Velocidade Ajustada: " .. tostring(roundedValue),
-            Duration = 1.5,
-            Icon = "rbxassetid://117056629401480"
-        })
+        NotifySpeedDebounced(roundedValue)
 
         SpeedSyncing = false
     end
@@ -668,6 +673,10 @@ SpinSection:AddToggle({
         end
     end
 })
+local SpinNotifyDebounced = FiveSync:Debounce(0.25, function(v)
+    SpinNotify("Velocidade: " .. tostring(v))
+end)
+
 SpinSection:AddSlider({
     Name = "Velocidade do Spin",
     Default = SpinSpeed,
@@ -679,7 +688,7 @@ SpinSection:AddSlider({
     Callback = function(value)
         SpinSpeed = math.floor(value)
         if SpinEnabled then
-            SpinNotify("Velocidade: " .. tostring(SpinSpeed))
+            SpinNotifyDebounced(SpinSpeed)
         end
     end
 })
@@ -841,6 +850,10 @@ FlySection:AddToggle({
     Flag = "Movement_Fly",
     Callback = ToggleFly
 })
+local NotifyFlyDebounced = FiveSync:Debounce(0.25, function(v)
+    NotifyFly("FLY", "Velocidade: "..v, 1.5)
+end)
+
 FlySlider = FlySection:AddSlider({
     Name = "Velocidade do Fly",
     Default = velocidadeVoo,
@@ -858,7 +871,7 @@ FlySlider = FlySection:AddSlider({
             FlyTextbox:SetValue(tostring(val))
         end
 
-        NotifyFly("FLY", "Velocidade: "..val, 0.5)
+        NotifyFlyDebounced(val)
 
         FlySyncing = false
     end
@@ -1002,6 +1015,10 @@ SkySection:AddToggle({
     Flag = "Movement_SkyBase",
     Callback = ToggleSky
 })
+local NotifySkyDebounced = FiveSync:Debounce(0.25, function(v)
+    NotifySky("Altura: " .. tostring(v))
+end)
+
 SkySection:AddSlider({
     Name = "Altura",
     Default = SkyHeight,
@@ -1010,7 +1027,7 @@ SkySection:AddSlider({
     Flag = "Movement_SkyHeight",
     Callback = function(v)
         SkyHeight = math.floor(v)
-        NotifySky("Altura: " .. SkyHeight)
+        NotifySkyDebounced(SkyHeight)
     end
 })
 SkySection:AddToggle({
@@ -1492,6 +1509,44 @@ local function refreshW()
     listText:SetContent(#t > 0 and table.concat(t, "\n") or "Nenhum")
 end
 
+-- Parte do alvo atual da mira: usa o Silent Aim quando ativo, senão o Aimbot.
+local function GetAimTargetPart()
+    if getgenv().SilentAim_Ativo and getgenv().SilentAim_CurrentPart then
+        return getgenv().SilentAim_CurrentPart
+    end
+    return getgenv().Aimbot_CurrentPart
+end
+
+-- Adiciona o dono da parte mirada (alvo do Aimbot ou Silent Aim) à whitelist.
+local function AddAimTargetToWhitelist()
+    local part = GetAimTargetPart()
+    local char = part and part.Parent
+    local model = char and char:FindFirstChildOfClass("Humanoid") and char
+    local plr = model and Players:GetPlayerFromCharacter(model)
+    if not plr then return false end
+    getgenv().Aimbot_Whitelist[plr.Name] = true
+    refreshW()
+    return true
+end
+getgenv().E34x_AddAimTargetToWhitelist = AddAimTargetToWhitelist
+
+-- Keybind dedicada: pressionar a tecla adiciona o alvo da mira à whitelist.
+local function WS_AddTargetKey()
+    local key = getgenv().Whitelist_Key
+    if not key then return end
+    local last
+    UserInputService.InputBegan:Connect(function(input, typing)
+        if typing then return end
+        local name = typeof(input.KeyCode) == "string" and input.KeyCode or input.KeyCode.Name
+        if name ~= key then return end
+        if os.clock() - (last or 0) < 0.15 then return end
+        last = os.clock()
+        if AddAimTargetToWhitelist() then
+            FiveSync:_PlaySound("ToggleOn")
+        end
+    end)
+end
+
 local pDrop = WSection:AddDropdown({
     Flag = "WSection_SelecionarJogador", Name = "Selecionar Jogador", Default = "Atualize...", Values = {"Atualize..."}, Callback = function(v) end })
 WSection:AddButton({ Name = "Atualizar Jogadores", Callback = function()
@@ -1513,6 +1568,16 @@ WSection:AddButton({ Name = "Adicionar", Callback = function()
     refreshW()
 end });
 WSection:AddButton({ Name = "Limpar", Callback = function() getgenv().Aimbot_Whitelist = {}; refreshW() end });
+
+-- Whitelist Key: tecla que adiciona o alvo atual da mira à whitelist
+WSection:AddKeybind({
+    Flag = "WSection_WhitelistKey", Name = "Whitelist Key", Default = "Y",
+    Callback = function(v) getgenv().Whitelist_Key = v end });
+WSection:AddButton({ Name = "Add Alvo da Mira", Callback = function()
+    AddAimTargetToWhitelist()
+end });
+
+WS_AddTargetKey()
 
 refreshW()
 
@@ -2357,10 +2422,12 @@ local Config = {
     
     Box = { Enabled = false, Type = "Full", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1, Outline = true,
             Fill = false, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.6,
-            Gradient = false, GradientColor = Color3.fromRGB(0, 0, 255), GradientTransparency = 0.0 },
+            Gradient = false, GradientColor = Color3.fromRGB(0, 0, 255), GradientTransparency = 0.0,
+            CornerScale = 0.25 },
     Tracer = { Enabled = false, Origin = "Bottom", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1 },
     Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1 },
-    Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1 },
+    Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1,
+             TextOutline = true, Shadow = false },
     Skeleton = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1 },
     FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela" },
     Rainbow = { Enabled = false, Speed = 0.05, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true, ApplyToSkeleton = true, ApplyToFOVLine = true }
@@ -2387,6 +2454,53 @@ local function CreateDrawing(type, properties)
     end
     return drawing
 end
+-- Cor escura derivada da cor do texto, usada como sombra para dar contraste.
+local function ShadowColor(c)
+    local h, s, v = Color3.toHSV(c)
+    return Color3.fromHSV(h, math.min(s, 0.6), v * 0.18)
+end
+
+-- Objetos Drawing são userdata e não aceitam campos novos, então as sombras
+-- ficam guardadas nesta tabela indexada pelo texto principal.
+local TextShadows = {}
+
+-- Aplica contorno nativo (Outline) e uma sombra opcional (segundo texto
+-- deslocado atrás do principal) ao texto do ESP.
+local function StyleText(t, color, size, transparency)
+    t.Color = color
+    t.Size = size
+    t.Transparency = transparency
+    t.Outline = Config.Info.TextOutline
+
+    local sh = TextShadows[t]
+    if Config.Info.Shadow then
+        if not sh then
+            sh = CreateDrawing("Text", { Center = true })
+            TextShadows[t] = sh
+        end
+        sh.Text = t.Text
+        sh.Position = t.Position + Vector2.new(1, 1)
+        sh.Color = ShadowColor(color)
+        sh.Size = size
+        sh.Transparency = math.min(1, transparency + 0.15)
+        sh.Outline = false
+        sh.Visible = t.Visible
+    elseif sh then
+        sh.Visible = false
+    end
+end
+
+local function HideText(t)
+    t.Visible = false
+    local sh = TextShadows[t]
+    if sh then sh.Visible = false end
+end
+
+local function RemoveTextShadow(t)
+    local sh = TextShadows[t]
+    if sh then sh.Visible = false; sh:Remove(); TextShadows[t] = nil end
+end
+
 -- Função de Limpeza Absoluta (Garante que nada fique na tela)
 local function ClearESP(player)
     local data = ESP_Cache[player]
@@ -2400,6 +2514,9 @@ local function ClearESP(player)
             if data.BoxGradient then
                 for _, g in pairs(data.BoxGradient) do g.Visible = false; g:Remove() end
             end
+            if data.Box3D then
+                for _, line in pairs(data.Box3D) do line.Visible = false; line:Remove() end
+            end
             -- Remove Tracer
             if data.Tracer then data.Tracer.Visible = false; data.Tracer:Remove() end
             -- Remove Textos
@@ -2409,7 +2526,10 @@ local function ClearESP(player)
             -- Remove Vida
             if data.HealthBar then data.HealthBar.Visible = false; data.HealthBar:Remove() end
             if data.HealthBarOutline then data.HealthBarOutline.Visible = false; data.HealthBarOutline:Remove() end
-            if data.HealthText then data.HealthText.Visible = false; data.HealthText:Remove() end
+            if data.HealthText then data.HealthText.Visible = false; RemoveTextShadow(data.HealthText); data.HealthText:Remove() end
+            for _, t in ipairs({ data.Name, data.Distance, data.Item }) do
+                if t then RemoveTextShadow(t) end
+            end
             -- Remove Esqueleto
             if data.Skeleton then
                 for _, line in pairs(data.Skeleton) do line.Visible = false; line:Remove() end
@@ -2438,6 +2558,8 @@ local function InitPlayerESP(player)
     data.HealthBar = CreateDrawing("Square", {Filled = true, Visible = false})
     data.HealthBarOutline = CreateDrawing("Square", {Filled = false, Color = Color3.new(0,0,0), Visible = false})
     data.HealthText = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
+    data.Box3D = {}
+    for i = 1, 12 do data.Box3D[i] = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1}) end
     
     ESP_Cache[player] = data
 end
@@ -2499,12 +2621,105 @@ local function ESP_RenderFOVLine(rainbowColor)
     FOVLineDraw.Visible = true
 end
 
+-- Desenha a caixa do ESP no modo pedido. "3D" projeta as 8 arestas do
+-- bounding box real do personagem, então a caixa gira junto com a câmera.
+local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillColor, rainbowColor)
+    if mode == "3D" then
+        for i = 1, 8 do data.Box["Line"..i].Visible = false end
+        data.BoxFill.Visible = false
+        for _, g in pairs(data.BoxGradient) do g.Visible = false end
+
+        local cf, size = char:GetBoundingBox()
+        local hx, hy, hz = size.X / 2, size.Y / 2, size.Z / 2
+        local signs = {
+            {-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1},
+            {-1, 1, -1}, {1, 1, -1}, {1, 1, 1}, {-1, 1, 1},
+        }
+        local edges = {
+            {1,2}, {2,3}, {3,4}, {4,1},
+            {5,6}, {6,7}, {7,8}, {8,5},
+            {1,5}, {2,6}, {3,7}, {4,8},
+        }
+        local pts, anyOn = {}, false
+        for i, sg in ipairs(signs) do
+            local wp = (cf * CFrame.new(sg[1] * hx, sg[2] * hy, sg[3] * hz)).Position
+            local vp, on = Camera:WorldToViewportPoint(wp)
+            pts[i] = Vector2.new(vp.X, vp.Y)
+            if on and vp.Z > 0 then anyOn = true end
+        end
+        for i, e in ipairs(edges) do
+            local l = data.Box3D[i]
+            l.From, l.To = pts[e[1]], pts[e[2]]
+            l.Color, l.Thickness, l.Transparency, l.Visible = boxColor, Config.Box.Thickness, Config.Box.Transparency, anyOn
+        end
+    else
+        if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
+
+        if mode == "Full" then
+            data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + width, y)
+            data.Box.Line2.From, data.Box.Line2.To = Vector2.new(x, y), Vector2.new(x, y + height)
+            data.Box.Line3.From, data.Box.Line3.To = Vector2.new(x + width, y), Vector2.new(x + width, y + height)
+            data.Box.Line4.From, data.Box.Line4.To = Vector2.new(x, y + height), Vector2.new(x + width, y + height)
+            for i = 1, 4 do
+                local l = data.Box["Line"..i]
+                l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency
+            end
+            for i = 5, 8 do data.Box["Line"..i].Visible = false end
+
+            if Config.Box.Fill then
+                data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
+                data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, Config.Box.FillTransparency, true
+            else
+                data.BoxFill.Visible = false
+            end
+
+            if Config.Box.Fill and Config.Box.Gradient then
+                local gColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.GradientColor
+                local steps = 24
+                local stepH = height / steps
+                local gTop = Config.Box.GradientTransparency
+                local gBot = 1
+                data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, gTop, true
+                for st = 1, steps do
+                    local tt = (st - 1) / (steps - 1)
+                    local g = data.BoxGradient["Step"..st]
+                    if not g then g = CreateDrawing("Square", { Filled = true, Visible = false }); data.BoxGradient["Step"..st] = g end
+                    g.Position = Vector2.new(x, y + (st - 1) * stepH)
+                    g.Size = Vector2.new(width, stepH + 1)
+                    g.Color = fillColor:Lerp(gColor, tt)
+                    g.Transparency = gTop + (gBot - gTop) * tt
+                    g.Visible = true
+                end
+            else
+                for _, g in pairs(data.BoxGradient) do g.Visible = false end
+            end
+        else -- Corner
+            local cl = width * Config.Box.CornerScale
+            data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + cl, y)
+            data.Box.Line2.From, data.Box.Line2.To = Vector2.new(x, y), Vector2.new(x, y + cl)
+            data.Box.Line3.From, data.Box.Line3.To = Vector2.new(x + width, y), Vector2.new(x + width - cl, y)
+            data.Box.Line4.From, data.Box.Line4.To = Vector2.new(x + width, y), Vector2.new(x + width, y + cl)
+            data.Box.Line5.From, data.Box.Line5.To = Vector2.new(x, y + height), Vector2.new(x + cl, y + height)
+            data.Box.Line6.From, data.Box.Line6.To = Vector2.new(x, y + height), Vector2.new(x, y + height - cl)
+            data.Box.Line7.From, data.Box.Line7.To = Vector2.new(x + width, y + height), Vector2.new(x + width - cl, y + height)
+            data.Box.Line8.From, data.Box.Line8.To = Vector2.new(x + width, y + height), Vector2.new(x + width, y + height - cl)
+            for i = 1, 8 do
+                local l = data.Box["Line"..i]
+                l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency
+            end
+            data.BoxFill.Visible = false
+            for _, g in pairs(data.BoxGradient) do g.Visible = false end
+        end
+    end
+end
+
 local function ESP_HideAll()
     for _, data in pairs(ESP_Cache) do
         pcall(function()
             for _, v in pairs(data.Box) do v.Visible = false end
             if data.BoxFill then data.BoxFill.Visible = false end
             if data.BoxGradient then for _, g in pairs(data.BoxGradient) do g.Visible = false end end
+            if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
             data.Tracer.Visible = false
             data.Name.Visible = false
             data.Distance.Visible = false
@@ -2575,63 +2790,12 @@ local function ESP_Render()
 
                 -- Box Render
                 if Config.Box.Enabled then
-                    if Config.Box.Type == "Full" then
-                        data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + width, y)
-                        data.Box.Line2.From, data.Box.Line2.To = Vector2.new(x, y), Vector2.new(x, y + height)
-                        data.Box.Line3.From, data.Box.Line3.To = Vector2.new(x + width, y), Vector2.new(x + width, y + height)
-                        data.Box.Line4.From, data.Box.Line4.To = Vector2.new(x, y + height), Vector2.new(x + width, y + height)
-                        for i=1, 4 do 
-                            local l = data.Box["Line"..i]
-                            l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency 
-                        end
-                        for i=5, 8 do data.Box["Line"..i].Visible = false end
-                        if Config.Box.Fill then
-                            data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
-                            data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, Config.Box.FillTransparency, true
-                        else
-                            data.BoxFill.Visible = false
-                        end
-                        if Config.Box.Fill and Config.Box.Gradient then
-                            local gColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.GradientColor
-                            local steps = 24
-                            local stepH = height / steps
-                            local gTop = Config.Box.GradientTransparency
-                            local gBot = 1
-                            data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, gTop, true
-                            for s = 1, steps do
-                                local st = (s - 1) / (steps - 1)
-                                local g = data.BoxGradient["Step"..s]
-                                if not g then g = CreateDrawing("Square", {Filled = true, Visible = false}); data.BoxGradient["Step"..s] = g end
-                                g.Position = Vector2.new(x, y + (s - 1) * stepH)
-                                g.Size = Vector2.new(width, stepH + 1)
-                                g.Color = fillColor:Lerp(gColor, st)
-                                g.Transparency = gTop + (gBot - gTop) * st
-                                g.Visible = true
-                            end
-                        else
-                            for _, g in pairs(data.BoxGradient) do g.Visible = false end
-                        end
-                    else -- Corner
-                        local cl = width / 4
-                        data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + cl, y)
-                        data.Box.Line2.From, data.Box.Line2.To = Vector2.new(x, y), Vector2.new(x, y + cl)
-                        data.Box.Line3.From, data.Box.Line3.To = Vector2.new(x + width, y), Vector2.new(x + width - cl, y)
-                        data.Box.Line4.From, data.Box.Line4.To = Vector2.new(x + width, y), Vector2.new(x + width, y + cl)
-                        data.Box.Line5.From, data.Box.Line5.To = Vector2.new(x, y + height), Vector2.new(x + cl, y + height)
-                        data.Box.Line6.From, data.Box.Line6.To = Vector2.new(x, y + height), Vector2.new(x, y + height - cl)
-                        data.Box.Line7.From, data.Box.Line7.To = Vector2.new(x + width, y + height), Vector2.new(x + width - cl, y + height)
-                        data.Box.Line8.From, data.Box.Line8.To = Vector2.new(x + width, y + height), Vector2.new(x + width, y + height - cl)
-                        for i=1, 8 do 
-                            local l = data.Box["Line"..i]
-                            l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency 
-                        end
-                        data.BoxFill.Visible = false
-                        for _, g in pairs(data.BoxGradient) do g.Visible = false end
-                    end
+                    DrawESPBox(data, Config.Box.Type, char, x, y, width, height, boxColor, fillColor, rainbowColor)
                 else
-                    for i=1, 8 do data.Box["Line"..i].Visible = false end
+                    for i = 1, 8 do data.Box["Line"..i].Visible = false end
                     data.BoxFill.Visible = false
                     for _, g in pairs(data.BoxGradient) do g.Visible = false end
+                    if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
                 end
 
                 -- Tracer Render
@@ -2645,35 +2809,51 @@ local function ESP_Render()
                 local ts = Config.Info.Size * scale
                 local off = y - 5
                 
-                if Config.Info.Name then 
-                    data.Name.Text, data.Name.Position, data.Name.Color, data.Name.Size, data.Name.Transparency, data.Name.Visible = player.DisplayName or player.Name, Vector2.new(headPos.X, off - ts), textColor, ts, Config.Info.Transparency, true
+                if Config.Info.Name then
+                    data.Name.Text = player.DisplayName or player.Name
+                    data.Name.Position = Vector2.new(headPos.X, off - ts)
+                    data.Name.Visible = true
+                    StyleText(data.Name, textColor, ts, Config.Info.Transparency)
                     off = off - ts - 2
-                else data.Name.Visible = false end
-                
-                if Config.Info.Distance then 
-                    data.Distance.Text, data.Distance.Position, data.Distance.Color, data.Distance.Size, data.Distance.Transparency, data.Distance.Visible = string.format("[%dM]", distance), Vector2.new(headPos.X, off - ts), textColor, ts, Config.Info.Transparency, true
+                else HideText(data.Name) end
+
+                if Config.Info.Distance then
+                    data.Distance.Text = string.format("%dM", math.floor(distance))
+                    data.Distance.Position = Vector2.new(headPos.X, off - ts)
+                    data.Distance.Visible = true
+                    StyleText(data.Distance, textColor, ts, Config.Info.Transparency)
                     off = off - ts - 2
-                else data.Distance.Visible = false end
-                
+                else HideText(data.Distance) end
+
                 if Config.Info.Item then
                     local tool = char:FindFirstChildOfClass("Tool") or player.Backpack:FindFirstChildOfClass("Tool")
-                    if tool then 
-                        data.Item.Text, data.Item.Position, data.Item.Color, data.Item.Size, data.Item.Transparency, data.Item.Visible = "["..tool.Name.."]", Vector2.new(headPos.X, off - ts), textColor, ts, Config.Info.Transparency, true 
-                    else data.Item.Visible = false end
-                else data.Item.Visible = false end
+                    if tool then
+                        data.Item.Text = tool.Name
+                        data.Item.Position = Vector2.new(headPos.X, off - ts)
+                        data.Item.Visible = true
+                        StyleText(data.Item, textColor, ts, Config.Info.Transparency)
+                    else HideText(data.Item) end
+                else HideText(data.Item) end
 
                 -- Life Render
                 if Config.Life.Enabled then
                     local hp = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
                     if Config.Life.Type == "Bar" then
-                        data.HealthBarOutline.Position, data.HealthBarOutline.Size, data.HealthBarOutline.Transparency, data.HealthBarOutline.Visible = Vector2.new(x - 6, y), Vector2.new(4, height), Config.Life.Transparency, true
-                        data.HealthBar.Position, data.HealthBar.Size, data.HealthBar.Color, data.HealthBar.Transparency, data.HealthBar.Visible = Vector2.new(x - 5, y + (height * (1-hp))), Vector2.new(2, height * hp), Color3.fromRGB(255,0,0):lerp(Color3.fromRGB(0,255,0), hp), Config.Life.Transparency, true
-                        data.HealthText.Visible = false
+                        data.HealthBarOutline.Position, data.HealthBarOutline.Size, data.HealthBarOutline.Transparency, data.HealthBarOutline.Visible = Vector2.new(x - 7, y), Vector2.new(5, height), Config.Life.Transparency, true
+                        data.HealthBarBackground.Position, data.HealthBarBackground.Size, data.HealthBarBackground.Transparency, data.HealthBarBackground.Visible = Vector2.new(x - 6, y + 1), Vector2.new(3, height - 2), 0.7, true
+                        data.HealthBar.Position, data.HealthBar.Size, data.HealthBar.Color, data.HealthBar.Transparency, data.HealthBar.Visible = Vector2.new(x - 6, y + 1 + ((height - 2) * (1 - hp))), Vector2.new(3, (height - 2) * hp), Color3.fromRGB(255,0,0):lerp(Color3.fromRGB(0,255,0), hp), Config.Life.Transparency, true
+                        HideText(data.HealthText)
                     else
-                        data.HealthText.Text, data.HealthText.Position, data.HealthText.Color, data.HealthText.Size, data.HealthText.Transparency, data.HealthText.Visible = math.floor(hum.Health).." HP", Vector2.new(headPos.X, y + height + 5), textColor, ts, Config.Life.Transparency, true
-                        data.HealthBar.Visible, data.HealthBarOutline.Visible = false, false
+                        data.HealthText.Text = math.floor(hum.Health).." HP"
+                        data.HealthText.Position = Vector2.new(headPos.X, y + height + 5)
+                        data.HealthText.Visible = true
+                        StyleText(data.HealthText, textColor, ts, Config.Life.Transparency)
+                        data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
                     end
-                else data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthText.Visible = false, false, false end
+                else
+                    data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
+                    HideText(data.HealthText)
+                end
 
                 -- Skeleton Render
                 if Config.Skeleton.Enabled then
@@ -2698,8 +2878,10 @@ local function ESP_Render()
                 for _, v in pairs(data.Box) do v.Visible = false end
                 data.BoxFill.Visible = false
                 for _, g in pairs(data.BoxGradient) do g.Visible = false end
-                data.Tracer.Visible, data.Name.Visible, data.Distance.Visible, data.Item.Visible, data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthText.Visible = false, false, false, false, false, false, false
+                data.Tracer.Visible, data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false, false
+                for _, t in ipairs({ data.Name, data.Distance, data.Item, data.HealthText }) do HideText(t) end
                 for _, v in pairs(data.Skeleton) do v.Visible = false end
+                if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
             end
         end)
     end
@@ -2772,7 +2954,9 @@ SecBox:AddToggle({
     Flag = "SecBox_AtivarBox", Name = "Ativar Box", Callback = function(v) Config.Box.Enabled = v end }).Link:AddColorPicker({
     Flag = "SecBox_CorBox", Default = Config.Box.Color, Callback = function(v) Config.Box.Color = v end });
 SecBox:AddDropdown({
-    Flag = "SecBox_TipodeBox", Name = "Tipo de Box", Default = "Full", Values = {"Full", "Corner"}, Callback = function(v) Config.Box.Type = v end });
+    Flag = "SecBox_TipodeBox", Name = "Tipo de Box", Default = "Full", Values = {"Full", "Corner", "3D"}, Callback = function(v) Config.Box.Type = v end });
+SecBox:AddSlider({
+    Flag = "SecBox_TamanhoCanto", Name = "Tamanho do Canto", Min = 0.1, Max = 0.5, Default = 0.25, Round = 2, Callback = function(v) Config.Box.CornerScale = v end });
 SecBox:AddSlider({
     Flag = "SecBox_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Box.Thickness = v end });
 SecBox:AddSlider({
@@ -2828,6 +3012,10 @@ SecInfo:AddToggle({
     Flag = "SecInfo_ItemSegurado", Name = "Item Segurado", Callback = function(v) Config.Info.Item = v end });
 SecInfo:AddSlider({
     Flag = "SecInfo_TamanhoTexto", Name = "Tamanho Texto", Min = 10, Max = 30, Default = 14, Callback = function(v) Config.Info.Size = v end });
+SecInfo:AddToggle({
+    Flag = "SecInfo_ContornoTexto", Name = "Contorno do Texto", Default = true, Callback = function(v) Config.Info.TextOutline = v end });
+SecInfo:AddToggle({
+    Flag = "SecInfo_SombraTexto", Name = "Sombra do Texto", Default = false, Callback = function(v) Config.Info.Shadow = v end });
 SecInfo:AddColorPicker({
     Flag = "SecInfo_CordoTexto", Name = "Cor do Texto", Default = Config.Info.Color, Callback = function(v) Config.Info.Color = v end });
 
@@ -3091,6 +3279,10 @@ CameraSection:AddToggle({
     Callback = ToggleThird
 })
 
+local NotifyCamDebounced = FiveSync:Debounce(0.25, function(v)
+    NotifyCam("Zoom: "..tostring(v))
+end)
+
 CameraSection:AddSlider({
     Name = "Distância Máxima",
     Default = MaxZoom,
@@ -3102,7 +3294,7 @@ CameraSection:AddSlider({
         if ThirdEnabled then
             ApplyCamera()
         end
-        NotifyCam("Zoom: "..MaxZoom)
+        NotifyCamDebounced(MaxZoom)
     end
 })
 
@@ -3244,6 +3436,9 @@ do
         { Id = "Hitbox",     Flag = "Combat_HitboxEnabled",     Label = "HITBOX" },
         { Id = "ESP",        Flag = "SecMain_AtivarESP",        Label = "ESP" },
         { Id = "FullBright", Flag = "VisualSection_FullBright", Label = "LIGHT" },
+        { Id = "AddWL",      Label = "ADD WL", Action = function()
+            if getgenv().E34x_AddAimTargetToWhitelist then getgenv().E34x_AddAimTargetToWhitelist() end
+        end },
     }
 
     local QuickButtons = {
@@ -3304,8 +3499,21 @@ do
         return gui
     end
 
+    -- Botão de ação (não reflete um Flag): só dispara a Callback ao clicar.
+    local function RefreshVisualAction(entry)
+        entry.Frame.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+        entry.Frame.BackgroundTransparency = 0.4
+        entry.Stroke.Color = QuickState.Accent
+        entry.Stroke.Transparency = 0.2
+        entry.Label.TextColor3 = Color3.fromRGB(230, 230, 230)
+    end
+
     -- Atualiza o visual (ligado/desligado) a partir do Flag alvo.
     local function RefreshVisual(entry)
+        if entry.Def.Action then
+            RefreshVisualAction(entry)
+            return
+        end
         local el = FiveSync.Flags[entry.Def.Flag]
         local on = false
         if el then
@@ -3329,6 +3537,13 @@ do
         el:SetValue(not cur)
         FiveSync:_PlaySound(cur and "ToggleOff" or "ToggleOn")
         RefreshVisual(entry)
+    end
+
+    -- Ação de um toque (ex.: adicionar alvo da mira à whitelist).
+    local function RunAction(entry)
+        if entry.Def.Action then entry.Def.Action() end
+        FiveSync:_PlaySound("ToggleOn")
+        RefreshVisualAction(entry)
     end
 
     function QuickButtons.Create(def, saved)
@@ -3374,6 +3589,7 @@ do
             Pos = frame.Position,
             On = false,
             DidDrag = false,
+            IsAction = def.Action ~= nil,
         }
 
         if saved then
@@ -3413,7 +3629,9 @@ do
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                 local wasDrag = entry.DidDrag
                 StopDrag()
-                if not wasDrag then ToggleEntry(entry) end
+                if not wasDrag then
+                    if entry.Def.Action then RunAction(entry) else ToggleEntry(entry) end
+                end
             end
         end)
         QuickUIS.InputChanged:Connect(function(input)
@@ -3556,6 +3774,9 @@ Settings:AddToggle({
         Window.AlwayShowTab = v;
     end,
 })
+
+-- Opções da janela: esconder lista de keybinds, tecla do menu e liberar mouse
+Window:DrawMenuOptions(Settings);
 
 Settings:AddColorPicker({
     Flag = "Settings_Highlight",

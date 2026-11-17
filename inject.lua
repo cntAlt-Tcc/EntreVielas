@@ -416,13 +416,45 @@ FiveSync.Sounds = {
 	ToggleOn = "rbxassetid://92972986635552",
 	ToggleOff = "rbxassetid://7060363375",
 	TabChange2 = "rbxassetid://135202593848667",
+	Notify = "rbxassetid://90035739456316",
+	MenuOpen = "rbxassetid://127441833735276",
+	Config = "rbxassetid://2940337254",
 	__Cache = {},
+	__Suppress = 0,
 };
+
+-- Runs fn with all UI sounds muted. Used by config loads / bulk SetValue so
+-- restoring a saved state does not fire a sound for every element at once.
+function FiveSync:_MuteSounds(fn)
+	FiveSync.Sounds.__Suppress += 1;
+	local ok, err = pcall(fn);
+	FiveSync.Sounds.__Suppress -= 1;
+	if not ok then
+		return error(err, 0);
+	end;
+end;
+
+-- Coalesces rapid successive calls (a slider being dragged fires once per value)
+-- so `fn` only runs after `Delay` seconds of quiet. The last call wins, which
+-- avoids flooding notifications while dragging.
+function FiveSync:Debounce(Delay: number, fn)
+	local Last = 0;
+	return function(...)
+		Last += 1;
+		local Token = Last;
+		local Args = table.pack(...);
+		task.delay(Delay, function()
+			if Token == Last then
+				fn(table.unpack(Args, 1, Args.n));
+			end;
+		end);
+	end;
+end;
 
 -- Play a UI sound. Instances are created lazily and reused (kept parented to
 -- CoreGui) so we never allocate one per click.
 function FiveSync:_PlaySound(Key: string, SoundId: string)
-	if not FiveSync.Sounds.Enabled then
+	if not FiveSync.Sounds.Enabled or FiveSync.Sounds.__Suppress > 0 then
 		return;
 	end;
 
@@ -3478,7 +3510,9 @@ function FiveSync:_DrawKeybinds(Window: ScreenGui)
 	FiveSync:Drag(MovingFrame,Keybinds,0.1);
 
 	local Ref = {
-		Root = Keybinds
+		Root = Keybinds,
+		-- When false the whole on-screen keybind list is hidden (config option).
+		Enabled = true
 	};
 
 	Ref.THREAD = task.spawn(function()
@@ -3540,7 +3574,7 @@ function FiveSync:_DrawKeybinds(Window: ScreenGui)
 				});
 			end;
 
-			Keybinds.Visible = (Keybinds.BackgroundTransparency < 0.9 and true) or false;
+			Keybinds.Visible = Ref.Enabled and (Keybinds.BackgroundTransparency < 0.9 and true) or false;
 
 			if FiveSync.PerformanceMode then
 				if Keybinds.Visible then
@@ -3986,16 +4020,27 @@ function FiveSync:_KeybindHandler(Parent: Frame , ObjectType: string , ElementAP
 		end;
 	end);
 
+	-- Applies a keybind value and plays the toggle sound only when the value
+	-- actually changes (mode "On"/"Hold" sets the same value twice, which
+	-- would otherwise double-fire the sound).
+	local function ApplyKeybindValue(val)
+		local changed = ElementAPI:GetValue() ~= val;
+		ElementAPI:SetValue(val);
+		if changed and ObjectType == "Toggle" then
+			FiveSync:_PlaySound(val and "ToggleOn" or "ToggleOff");
+		end;
+	end;
+
 	UserInputService.InputBegan:Connect(function(Input,Typing)
 		if Input.KeyCode.Name == APIRef.Keybind or Input.KeyCode == APIRef.Keybind or (Input.UserInputType == Enum.UserInputType.MouseButton1 and APIRef.Keybind == "MouseLeft") or (Input.UserInputType == Enum.UserInputType.MouseButton2 and APIRef.Keybind == "MouseRight") then
 
 			if APIRef.Mode == 2 or APIRef.Mode == 4 then
-				ElementAPI:SetValue(APIRef.On);
+				ApplyKeybindValue(APIRef.On);
 			elseif APIRef.Mode == 3 then
 				if ElementAPI:GetValue() == APIRef.On then
-					ElementAPI:SetValue(APIRef.Off);
+					ApplyKeybindValue(APIRef.Off);
 				else
-					ElementAPI:SetValue(APIRef.On);
+					ApplyKeybindValue(APIRef.On);
 				end;
 			end;
 		end;
@@ -4005,9 +4050,9 @@ function FiveSync:_KeybindHandler(Parent: Frame , ObjectType: string , ElementAP
 		if Input.KeyCode.Name == APIRef.Keybind or Input.KeyCode == APIRef.Keybind or (Input.UserInputType == Enum.UserInputType.MouseButton1 and APIRef.Keybind == "MouseLeft") or (Input.UserInputType == Enum.UserInputType.MouseButton2 and APIRef.Keybind == "MouseRight") then
 
 			if APIRef.Mode == 2 then
-				ElementAPI:SetValue(APIRef.Off);
+				ApplyKeybindValue(APIRef.Off);
 			elseif APIRef.Mode == 4 then
-				ElementAPI:SetValue(APIRef.On);
+				ApplyKeybindValue(APIRef.On);
 			end;
 		end;
 	end);
@@ -6507,6 +6552,10 @@ function FiveSync.new(Config : Window)
 	local TabMainFrame = Instance.new("Frame")
 
 	FiveSync:_DrawKeybinds(ScreenGuiObj);
+
+	-- Expose the on-screen keybind list so the config tab can toggle its
+	-- visibility and the user can hide the overlay entirely.
+	WindowArgs.KeybindList = FiveSync.__KEYBINDS_CACHE;
 
 	UIListLayout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
 		TabButtonScrollingFrame.CanvasSize = UDim2.fromOffset(0,UIListLayout.AbsoluteContentSize.Y)
@@ -9948,7 +9997,11 @@ function FiveSync.new(Config : Window)
 				MainFrame.Visible = Value;
 			end;
 
+			FiveSync:_PlaySound("MenuOpen");
+
 			WindowOpen:Fire(Value);
+
+			WindowArgs:_ApplyMouseState();
 
 			if Value then
 				for i,v in next , WindowArgs.Tabs do
@@ -10019,6 +10072,82 @@ function FiveSync.new(Config : Window)
 
 	function WindowArgs:SetMenuKey(new: string | Enum.KeyCode)
 		Config.Keybind = new;
+	end;
+
+	-- Adds the "Menu" section used by the config tab: hide the on-screen
+	-- keybind list, rebind the menu key, and free the mouse cursor while the
+	-- window is open (restoring the previous state when it closes).
+	function WindowArgs:DrawMenuOptions(ParentSection)
+		local Section = ParentSection or WindowArgs:DrawTab({
+			Name = "Menu",
+			Icon = "settings-3",
+			Type = "Single",
+			EnableScrolling = true,
+		}):DrawSection({ Name = "Janela & Keybinds" });
+
+		Section:AddToggle({
+			Flag = "Menu_ShowKeybinds",
+			Name = "Mostrar Lista de Keybinds",
+			Default = true,
+			Callback = function(v)
+				local list = WindowArgs.KeybindList or FiveSync.__KEYBINDS_CACHE;
+				if list then
+					list.Enabled = v;
+				end;
+			end,
+		});
+
+		Section:AddKeybind({
+			Flag = "Menu_MenuKey",
+			Name = "Tecla do Menu",
+			Default = Config.Keybind,
+			Callback = function(v)
+				WindowArgs:SetMenuKey(v);
+			end,
+		});
+
+		Section:AddToggle({
+			Flag = "Menu_FreeMouse",
+			Name = "Liberar Mouse no Menu",
+			Default = true,
+			Callback = function(v)
+				WindowArgs.FreeMouse = v;
+				WindowArgs:_ApplyMouseState();
+			end,
+		});
+
+		-- Apply the default right away so the cursor is already free when the
+		-- window is open at startup.
+		WindowArgs.FreeMouse = true;
+		WindowArgs:_ApplyMouseState();
+
+		return Section;
+	end;
+
+	-- Applies the mouse state for the current window open/closed state. When
+	-- FreeMouse is enabled the cursor is unlocked (and the icon shown) while
+	-- the menu is open; the previous behaviour is restored on close.
+	function WindowArgs:_ApplyMouseState()
+		if not WindowArgs.FreeMouse then
+			return;
+		end;
+
+		if WindowArgs.IsOpen then
+			if WindowArgs.__SavedMouse == nil then
+				WindowArgs.__SavedMouse = {
+					Behavior = UserInputService.MouseBehavior,
+					Icon = UserInputService.MouseIconEnabled,
+				};
+			end;
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default;
+			UserInputService.MouseIconEnabled = true;
+		else
+			if WindowArgs.__SavedMouse then
+				UserInputService.MouseBehavior = WindowArgs.__SavedMouse.Behavior;
+				UserInputService.MouseIconEnabled = WindowArgs.__SavedMouse.Icon;
+				WindowArgs.__SavedMouse = nil;
+			end;
+		end;
 	end;
 
 	function WindowArgs:Update(config: WindowUpdate)
@@ -10287,6 +10416,8 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 		end
 
 		writefile(FiveSync:_Path(Args.Directory , Config.Name) , HttpService:JSONEncode(Flags));
+
+		FiveSync:_PlaySound("Config");
 	end;
 
 	function Args:LoadConfigFromString(str: string)
@@ -10294,27 +10425,30 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 
 		local Flags = FiveSync:GetConfig("KV");
 
-		for i,v in next , decoded do
-			if v and v.Flag then
+		-- Mute sounds so restoring a config does not fire a click for every element.
+		FiveSync:_MuteSounds(function()
+			for i,v in next , decoded do
+				if v and v.Flag then
 
-				local Value = Flags[v.Flag];
+					local Value = Flags[v.Flag];
 
-				if Value then
+					if Value then
 
-					if v.Value.Type == "NormalElement" then
-						Value.Functions:SetValue(v.Value.Value);
+						if v.Value.Type == "NormalElement" then
+							Value.Functions:SetValue(v.Value.Value);
 
-					elseif v.Value.Type == "ColorPicker" then
+						elseif v.Value.Type == "ColorPicker" then
 
-						local Color = Color3.new(v.Value.Color3.R,v.Value.Color3.G,v.Value.Color3.B);
+							local Color = Color3.new(v.Value.Color3.R,v.Value.Color3.G,v.Value.Color3.B);
 
-						local Transparency = v.Value.Transparency;
+							local Transparency = v.Value.Transparency;
 
-						Value.Functions:SetValue(Color , Transparency);
+							Value.Functions:SetValue(Color , Transparency);
+						end;
 					end;
-				end;
-			end
-		end;
+				end
+			end;
+		end);
 	end;
 
 	function Args:GetCurrentConfig()
@@ -10393,6 +10527,8 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 
 			local Flags = FiveSync:GetConfig("KV");
 
+			FiveSync:_PlaySound("Config");
+
 			if Args.EnableNotify then
 				notify.new({
 					Title = "Configs",
@@ -10401,33 +10537,36 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 				})
 			end
 
-			for i,v in next , decoded do
-				if v and v.Flag then
+			-- Mute sounds so restoring a config does not fire a click for every element.
+			FiveSync:_MuteSounds(function()
+				for i,v in next , decoded do
+					if v and v.Flag then
 
-					local Value = Flags[v.Flag];
+						local Value = Flags[v.Flag];
 
-					if Value then
+						if Value then
 
-						if v.Value.Type == "NormalElement" then
-							Value.Functions:SetValue(v.Value.Value);
+							if v.Value.Type == "NormalElement" then
+								Value.Functions:SetValue(v.Value.Value);
 
-						elseif v.Value.Type == "ColorPicker" then
+							elseif v.Value.Type == "ColorPicker" then
 
-							local Color = Color3.new(v.Value.Color3.R,v.Value.Color3.G,v.Value.Color3.B);
+								local Color = Color3.new(v.Value.Color3.R,v.Value.Color3.G,v.Value.Color3.B);
 
-							local Transparency = v.Value.Transparency;
+								local Transparency = v.Value.Transparency;
 
-							Value.Functions:SetValue(Color , Transparency);
-						end;
+								Value.Functions:SetValue(Color , Transparency);
+							end;
 
-						if Value.Functions.AutoKeybind then
-							if v.AutoKeybind then
-								Value.Functions.AutoKeybind:LoadSettings(v.AutoKeybind)
+							if Value.Functions.AutoKeybind then
+								if v.AutoKeybind then
+									Value.Functions.AutoKeybind:LoadSettings(v.AutoKeybind)
+								end;
 							end;
 						end;
-					end;
-				end
-			end;
+					end
+				end;
+			end);
 		end;
 	end;
 
@@ -10577,6 +10716,8 @@ function FiveSync.newNotify()
 				Content = "Content",
 				Duration = 3,
 			});
+
+			FiveSync:_PlaySound("Notify");
 
 			LayoutREF -= 5;
 
