@@ -2721,8 +2721,9 @@ local function GetFOVLineOrigin()
     return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2) -- "Tela" (centro)
 end
 -- O alvo da FOV Line precisa passar nas MESMAS regras do aim (team check,
--- whitelist, vida e parede). Assim a linha nunca aponta para um aliado,
--- whitelisted ou atrás de parede, mesmo que o alvo guardado esteja desatualizado.
+-- whitelist e vida). Assim a linha nunca aponta para um aliado/whitelisted,
+-- mesmo que o alvo guardado esteja desatualizado. O wall check fica de fora:
+-- um raycast por frame adiciona custo/detectabilidade sem mudar a mira.
 local function FOVLineTargetValid(part)
     local model = part
     while model and model ~= workspace do
@@ -2737,17 +2738,6 @@ local function FOVLineTargetValid(part)
         if plr == LocalPlayer then return false end
         if getgenv().Aimbot_Whitelist[plr.Name] then return false end
         if getgenv().Aimbot_TeamCheck and plr.Team == LocalPlayer.Team then return false end
-    end
-    -- Wall check: qualquer um dos dois modos ligado exige linha de visão.
-    local wall = getgenv().SilentAim_WallCheck or getgenv().Aimbot_WallCheck
-    if wall then
-        local ok, res = pcall(function()
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = { LocalPlayer.Character, model }
-            return workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, params)
-        end)
-        if not ok or res then return false end
     end
     return true
 end
