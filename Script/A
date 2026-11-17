@@ -1509,36 +1509,87 @@ local function refreshW()
     listText:SetContent(#t > 0 and table.concat(t, "\n") or "Nenhum")
 end
 
--- Parte do alvo atual da mira: usa o Silent Aim quando ativo, senão o Aimbot.
-local function GetAimTargetPart()
-    if getgenv().SilentAim_Ativo and getgenv().SilentAim_CurrentPart then
-        return getgenv().SilentAim_CurrentPart
+-- Sobe a hierarquia da parte até achar o Character de um jogador (tolera
+-- acessórios, cujo Parent não é o modelo do personagem).
+local function PlayerFromPart(part)
+    local node = part
+    while node and node ~= workspace do
+        local plr = Players:GetPlayerFromCharacter(node)
+        if plr then return plr end
+        node = node.Parent
     end
-    return getgenv().Aimbot_CurrentPart
+    return nil
 end
 
--- Adiciona o dono da parte mirada (alvo do Aimbot ou Silent Aim) à whitelist.
+-- Quem está na mira: alvo do Silent Aim, senão do Aimbot. Se nenhum dos dois
+-- estiver ligado, cai para a parte sob o mouse e, por fim, para o centro da
+-- câmera (mira travada no meio da tela).
+local function GetAimTargetPlayer()
+    if getgenv().SilentAim_Ativo and getgenv().SilentAim_CurrentPart then
+        local plr = PlayerFromPart(getgenv().SilentAim_CurrentPart)
+        if plr then return plr end
+    end
+    if getgenv().Aimbot_Ativo and getgenv().Aimbot_CurrentPart then
+        local plr = PlayerFromPart(getgenv().Aimbot_CurrentPart)
+        if plr then return plr end
+    end
+    local ok, plr = pcall(function()
+        local mouse = LocalPlayer:GetMouse()
+        return mouse and mouse.Target and PlayerFromPart(mouse.Target)
+    end)
+    if ok and plr then return plr end
+    ok, plr = pcall(function()
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { LocalPlayer.Character }
+        local hit = workspace:Raycast(Camera.CFrame.Position, Camera.CFrame.LookVector * 500, params)
+        return hit and hit.Instance and PlayerFromPart(hit.Instance)
+    end)
+    if ok and plr then return plr end
+    return nil
+end
+
+-- Adiciona à whitelist o dono da parte mirada (Aimbot, Silent Aim ou mouse).
 local function AddAimTargetToWhitelist()
-    local part = GetAimTargetPart()
-    local char = part and part.Parent
-    local model = char and char:FindFirstChildOfClass("Humanoid") and char
-    local plr = model and Players:GetPlayerFromCharacter(model)
-    if not plr then return false end
+    local plr = GetAimTargetPlayer()
+    if not plr then
+        Notifier.new({
+            Title = "Whitelist",
+            Content = "Nenhum alvo na mira",
+            Duration = 1.5,
+            Icon = "rbxassetid://117056629401480",
+        })
+        return false
+    end
     getgenv().Aimbot_Whitelist[plr.Name] = true
     refreshW()
+    Notifier.new({
+        Title = "Whitelist",
+        Content = plr.Name .. " adicionado",
+        Duration = 1.5,
+        Icon = "rbxassetid://117056629401480",
+    })
     return true
 end
 getgenv().E34x_AddAimTargetToWhitelist = AddAimTargetToWhitelist
 
+-- O Callback do AddKeybind só roda quando o usuário reatribui a tecla, então o
+-- global precisa já existir para o listener abaixo funcionar de primeira.
+getgenv().Whitelist_Key = getgenv().Whitelist_Key or "Y"
+
+local function InputMatchesKey(input, key)
+    if key == "MouseLeft" then return input.UserInputType == Enum.UserInputType.MouseButton1 end
+    if key == "MouseRight" then return input.UserInputType == Enum.UserInputType.MouseButton2 end
+    return input.KeyCode ~= nil and input.KeyCode.Name == key
+end
+
 -- Keybind dedicada: pressionar a tecla adiciona o alvo da mira à whitelist.
 local function WS_AddTargetKey()
-    local key = getgenv().Whitelist_Key
-    if not key then return end
     local last
     UserInputService.InputBegan:Connect(function(input, typing)
         if typing then return end
-        local name = typeof(input.KeyCode) == "string" and input.KeyCode or input.KeyCode.Name
-        if name ~= key then return end
+        local key = getgenv().Whitelist_Key
+        if not key or not InputMatchesKey(input, key) then return end
         if os.clock() - (last or 0) < 0.15 then return end
         last = os.clock()
         if AddAimTargetToWhitelist() then
