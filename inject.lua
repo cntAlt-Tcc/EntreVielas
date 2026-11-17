@@ -409,6 +409,49 @@ FiveSync.Elements = {
 	HighStrokeColor = {},
 };
 
+FiveSync.Sounds = {
+	Enabled = true,
+	Volume = 0.5,
+	TabChange = "rbxassetid://117110103999401",
+	ToggleOn = "rbxassetid://92972986635552",
+	ToggleOff = "rbxassetid://7060363375",
+	TabChange2 = "rbxassetid://135202593848667",
+	__Cache = {},
+};
+
+-- Play a UI sound. Instances are created lazily and reused (kept parented to
+-- CoreGui) so we never allocate one per click.
+function FiveSync:_PlaySound(Key: string, SoundId: string)
+	if not FiveSync.Sounds.Enabled then
+		return;
+	end;
+
+	if SoundId == nil then
+		SoundId = FiveSync.Sounds[Key];
+	end;
+
+	if not SoundId then
+		return;
+	end;
+
+	local Sound = FiveSync.Sounds.__Cache[Key];
+
+	if not Sound then
+		Sound = Instance.new("Sound");
+		Sound.Name = "FiveSync_" .. tostring(Key);
+		Sound.Volume = FiveSync.Sounds.Volume;
+		Sound.Parent = CoreGui;
+		FiveSync.Sounds.__Cache[Key] = Sound;
+	end;
+
+	Sound.SoundId = SoundId;
+
+	pcall(function()
+		Sound.TimePosition = 0;
+		Sound:Play();
+	end);
+end;
+
 FiveSync.DragBlacklist = {};
 FiveSync.IaDrag = false;
 FiveSync.LastDrag = tick();
@@ -3773,6 +3816,11 @@ function FiveSync:_KeybindHandler(Parent: Frame , ObjectType: string , ElementAP
 		Name = ElementAPI:GetText()
 	};
 
+	-- Hook overridable: the owning element can mirror key/mode changes in the row.
+	APIRef.__Sync = function() end;
+	APIRef.Open = function() KB_Signal:Fire(true); end;
+	APIRef.Close = function() KB_Signal:Fire(false); end;
+
 	local ModeEnum = {
 		[1] = 'Off', -- disabled / off
 		[2] = "Hold",
@@ -3815,6 +3863,7 @@ function FiveSync:_KeybindHandler(Parent: Frame , ObjectType: string , ElementAP
 		Default = APIRef.Keybind,
 		Callback = function(v)
 			APIRef.Keybind = v;
+			APIRef.__Sync();
 		end,
 	});
 
@@ -3828,6 +3877,8 @@ function FiveSync:_KeybindHandler(Parent: Frame , ObjectType: string , ElementAP
 			if APIRef.Mode == 4 then
 				ElementAPI:SetValue(APIRef.On);
 			end;
+
+			APIRef.__Sync();
 		end,
 	});
 
@@ -3902,6 +3953,7 @@ function FiveSync:_KeybindHandler(Parent: Frame , ObjectType: string , ElementAP
 		Flag.Key:SetValue(cfg.Key);
 
 		APIRef.Update();
+		APIRef.__Sync();
 	end;
 
 	APIRef.Thread = task.spawn(function()
@@ -4723,6 +4775,108 @@ function FiveSync:_LoadDropdown(BaseParent: TextButton , Callback: () -> any)
 	return Args;
 end;
 
+local function AddToggleElement(Config, Parent, Signal, Zindex, EnabledLine, DisableStackKeybind)
+	Config = FiveSync.__CONFIG(Config,{
+		Name = "Toggle",
+		Default = false,
+		Flag = nil,
+		Risky = false,
+		Callback = function() end;
+	});
+
+	local Block = FiveSync:_CreateBlock(Signal);
+
+	Block:SetParent(Parent);
+
+	Block:SetText(Config.Name);
+
+	if Config.Risky then
+		Block:SetTextColor(FiveSync.Colors.Risky);
+	end;
+
+	Block:SetLine(EnabledLine);
+
+	Block:SetVisible(Signal:GetValue());
+
+	local Toggle = Block:AddLink('Toggle' , Config.Default);
+
+	Toggle.Input.MouseButton1Click:Connect(function()
+		Config.Default = not Config.Default;
+
+		Toggle.ChangeValue(Config.Default);
+
+		Block:SetTransparency((Config.Default and 0.1) or 0.3);
+
+		FiveSync:_PlaySound(Config.Default and "ToggleOn" or "ToggleOff");
+
+		Config.Callback(Config.Default);
+	end);
+
+	local Args = {};
+
+	Args.Flag = Config.Flag;
+
+	function Args:SetValue(value)
+		Config.Default = value;
+
+		Toggle.ChangeValue(Config.Default);
+
+		Block:SetTransparency((Config.Default and 0.1) or 0.3);
+
+		Config.Callback(Config.Default);
+	end;
+
+	Args.Signal = Signal:Connect(function(bool)
+		Block:SetVisible(bool);
+
+	end);
+
+	Args.Link = FiveSync:_LoadOption(Block);
+
+	function Args:GetValue()
+		return Config.Default;
+	end;
+
+	function Args:SetText(str : string)
+		Block:SetText(str or Config.Name);
+	end;
+
+	function Args:GetText()
+		return Block:GetText();
+	end;
+
+	if Config.Flag then
+		FiveSync.Flags[Config.Flag] = Args;
+	end;
+
+	if not DisableStackKeybind then
+		local AutoKeybind = FiveSync:_KeybindHandler(Block.Root , "Toggle" , Args , Signal , Zindex , Config);
+
+			Args.AutoKeybind = AutoKeybind;
+
+			-- Visible keybind chip in the row: clicking it opens the bind menu, so the
+			-- auto-keybind is discoverable instead of hidden behind right-click.
+			local Chip = Block:AddLink('Keybind', nil);
+			Args.KeybindChip = Chip;
+
+			FiveSync:_Input(Chip.Root, function()
+				AutoKeybind.Open();
+			end);
+
+			AutoKeybind.__Sync = function()
+				local mode = AutoKeybind.Mode;
+				local label = (mode ~= 1 and AutoKeybind.Keybind) and AutoKeybind.Keybind or "None";
+				Chip.SetValue(label);
+				AutoKeybind.__ChipText = tostring(label);
+			end;
+			AutoKeybind.__Sync();
+	end;
+
+	Args.Root = Block.Root;
+
+	return Args;
+end;
+
 function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , DisableStackKeybind)
 	local Zindex = Parent.ZIndex + 1;
 	local Tween = TweenInfo.new(0.25,Enum.EasingStyle.Quint);
@@ -4730,84 +4884,7 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 	local Args = {};
 
 	function Args:AddToggle(Config : Toggle)
-		Config = FiveSync.__CONFIG(Config,{
-			Name = "Toggle",
-			Default = false,
-			Flag = nil,
-			Risky = false,
-			Callback = function() end;
-		});
-
-		local Block = FiveSync:_CreateBlock(Signal);
-
-		Block:SetParent(Parent);
-
-		Block:SetText(Config.Name);
-
-		if Config.Risky then
-			Block:SetTextColor(FiveSync.Colors.Risky);
-		end;
-
-		Block:SetLine(EnabledLine);
-
-		Block:SetVisible(Signal:GetValue());
-
-		local Toggle = Block:AddLink('Toggle' , Config.Default);
-
-		Toggle.Input.MouseButton1Click:Connect(function()
-			Config.Default = not Config.Default;
-
-			Toggle.ChangeValue(Config.Default);
-
-			Block:SetTransparency((Config.Default and 0.1) or 0.3);
-
-			Config.Callback(Config.Default);
-		end);
-
-		local Args = {};
-
-		Args.Flag = Config.Flag;
-
-		function Args:SetValue(value)
-			Config.Default = value;
-
-			Toggle.ChangeValue(Config.Default);
-
-			Block:SetTransparency((Config.Default and 0.1) or 0.3);
-
-			Config.Callback(Config.Default);
-		end;
-
-		Args.Signal = Signal:Connect(function(bool)
-			Block:SetVisible(bool);
-
-		end);
-
-		Args.Link = FiveSync:_LoadOption(Block);
-
-		function Args:GetValue()
-			return Config.Default;
-		end;
-
-		function Args:SetText(str : string)
-			Block:SetText(str or Config.Name);
-		end;
-
-		function Args:GetText()
-			return Block:GetText();
-		end;
-
-		if Config.Flag then
-			FiveSync.Flags[Config.Flag] = Args;
-		end;
-
-		if not DisableStackKeybind then
-			local AutoKeybind = FiveSync:_KeybindHandler(Block.Root , "Toggle" , Args , Signal , Zindex , Config);
-
-			Args.AutoKeybind = AutoKeybind;
-		end;
-
-		return Args;
+		return AddToggleElement(Config, Parent, Signal, Zindex, EnabledLine, DisableStackKeybind);
 	end;
 
 	function Args:AddKeybind(Config : Keybind)
@@ -7366,6 +7443,7 @@ function FiveSync.new(Config : Window)
 		end);
 
 		FiveSync:_Input(TabButton,function()
+			FiveSync:_PlaySound("TabChange");
 			for i,v in next, WindowArgs.Tabs do
 				if v.Root == TabButton then
 					v.Remote:Fire(true);
@@ -7524,6 +7602,7 @@ function FiveSync.new(Config : Window)
 			table.insert(TabArgs.Tabs,Id)
 
 			FiveSync:_Input(Frame,function()
+				FiveSync:_PlaySound("TabChange2");
 				for i,v in next , TabArgs.Tabs do
 					if v.Root == Frame then
 						TabArgs.__Current = v;
@@ -8252,6 +8331,7 @@ function FiveSync.new(Config : Window)
 		end);
 
 		FiveSync:_Input(TabButton,function()
+			FiveSync:_PlaySound("TabChange");
 			for i,v in next, WindowArgs.Tabs do
 				if v.Root == TabButton then
 					v.Remote:Fire(true);
@@ -9215,6 +9295,7 @@ function FiveSync.new(Config : Window)
 			end);
 
 			FiveSync:_Input(TabButton,function()
+				FiveSync:_PlaySound("TabChange");
 				for i,v in next, WindowArgs.Tabs do
 					if v.Root == TabButton then
 						v.Remote:Fire(true);
@@ -9610,12 +9691,12 @@ function FiveSync.new(Config : Window)
 		CloseWindow.BackgroundTransparency = 1
 		CloseWindow.BorderColor3 = Color3.fromRGB(0, 0, 0)
 		CloseWindow.BorderSizePixel = 0
-		CloseWindow.Position = UDim2.new(1, -10, 0, 10)
-		CloseWindow.Size = UDim2.new(0, 0, 0, 23)
+		CloseWindow.Position = UDim2.new(1, -12, 0, 12)
+		CloseWindow.Size = UDim2.new(0, 0, 0, 34)
 		CloseWindow.ZIndex = 150
 		CloseWindow.ClipsDescendants = true;
 
-		UICorner.CornerRadius = UDim.new(0, 3)
+		UICorner.CornerRadius = UDim.new(0, 6)
 		UICorner.Parent = CloseWindow
 
 		ImageLabel.Parent = CloseWindow
@@ -9638,7 +9719,7 @@ function FiveSync.new(Config : Window)
 				ImageLabel.ClipsDescendants = true;
 
 				FiveSync:_Animation(CloseWindow,TweenInfo.new(0.2),{
-					Size = UDim2.new(0, 45, 0, 23),
+					Size = UDim2.new(0, 66, 0, 34),
 					BackgroundTransparency = 0.025
 				})
 
@@ -9649,7 +9730,7 @@ function FiveSync.new(Config : Window)
 				ImageLabel.ClipsDescendants = false;
 
 				FiveSync:_Animation(CloseWindow,TweenInfo.new(0.2),{
-					Size = UDim2.new(0, 0, 0, 23),
+					Size = UDim2.new(0, 0, 0, 34),
 					BackgroundTransparency = 1
 				})
 
