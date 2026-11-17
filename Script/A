@@ -2604,6 +2604,9 @@ local function ClearESP(player)
             if data.Box3D then
                 for _, line in pairs(data.Box3D) do line.Visible = false; line:Remove() end
             end
+            if data.Box3DFill then
+                for _, q in pairs(data.Box3DFill) do q.Visible = false; q:Remove() end
+            end
             -- Remove Tracer
             if data.Tracer then data.Tracer.Visible = false; data.Tracer:Remove() end
             -- Remove Textos
