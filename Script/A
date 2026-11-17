@@ -1660,6 +1660,10 @@ getgenv().SilentAim_ShowTarget = false
 getgenv().SilentAim_HitChance  = 100
 getgenv().SilentAim_Prediction = 0
 getgenv().SilentAim_NPCs       = true
+-- Ghost Mode (indetectável): instala o hook de mira mexendo direto na metatable
+-- (getrawmetatable + setreadonly) em vez de chamar hookmetamethod, que é o vetor
+-- que detectores de "IndexInstance" procuram.
+getgenv().SilentAim_GhostMode  = false
 
 -- // Métodos ativos (multi-seleção via UI)
 -- Liga por padrão todos os métodos baseados em ray: são os "métodos seguros"
@@ -1917,6 +1921,49 @@ end
 -- (era isso que detectores de "IndexInstance" flagavam).
 local SA_OldNamecall, SA_OldIndex
 local SA_NamecallHooked, SA_IndexHooked = false, false
+-- Mecanismo usado em cada hook (true = Ghost Mode via rawmetatable). Guardado
+-- por hook para restaurar pelo mesmo caminho que instalou.
+local SA_NamecallGhost, SA_IndexGhost = false, false
+
+-- Ghost Mode: instala o metamétodo mexendo direto na metatable (getrawmetatable
+-- + setreadonly), SEM chamar hookmetamethod — que é o vetor que detectores de
+-- "IndexInstance" procuram. Devolve installed, oldMetamethod, usedGhost.
+local function SA_InstallMeta(obj, name, fn, ghost)
+    if ghost then
+        local getmt = getrawmetatable or (syn and syn.getrawmetatable)
+        local setro = setreadonly or (syn and syn.setreadonly)
+        if getmt and setro then
+            local ok, mt = pcall(getmt, obj)
+            if ok and mt then
+                local old = rawget(mt, name)
+                setro(mt, false)
+                rawset(mt, name, fn)
+                setro(mt, true)
+                return true, old, true
+            end
+        end
+        -- Executor sem rawmetatable: cai no hookmetamethod (ainda funciona).
+    end
+    local old = SA_HookMeta(obj, name, fn)
+    return (old ~= nil), old, false
+end
+
+local function SA_RestoreMeta(obj, name, old, ghost)
+    if ghost then
+        local getmt = getrawmetatable or (syn and syn.getrawmetatable)
+        local setro = setreadonly or (syn and syn.setreadonly)
+        if getmt and setro then
+            local ok, mt = pcall(getmt, obj)
+            if ok and mt then
+                setro(mt, false)
+                rawset(mt, name, old)
+                setro(mt, true)
+                return
+            end
+        end
+    end
+    SA_HookMeta(obj, name, old)
+end
 
 local function SA_NamecallHook(...)
     local method = SA_GetNamecall and SA_GetNamecall()
@@ -1991,27 +2038,35 @@ local function SA_NeedsNamecall()
         or SA_Methods.FindPartOnRayWithWhitelist or SA_Methods.ViewportPointToRay or SA_Methods.ScreenPointToRay
 end
 
--- Instala/remove os hooks conforme o estado atual (ativo + método). Fica sem
--- hook nenhum quando o Silent Aim está desligado ou o método não precisa.
+-- Instala/remove os hooks conforme o estado atual (ativo + método + Ghost Mode).
+-- Fica sem hook nenhum quando o Silent Aim está desligado ou o método não
+-- precisa. Trocar o Ghost Mode com a mira ligada reinstala pelo novo mecanismo.
 local function SA_UpdateHooks()
+    local ghost = getgenv().SilentAim_GhostMode and true or false
     local wantNamecall = getgenv().SilentAim_Ativo and SA_NeedsNamecall()
+    if SA_NamecallHooked and SA_NamecallGhost ~= ghost then
+        SA_RestoreMeta(game, "__namecall", SA_OldNamecall, SA_NamecallGhost)
+        SA_OldNamecall, SA_NamecallHooked, SA_NamecallGhost = nil, false, false
+    end
     if wantNamecall and not SA_NamecallHooked then
-        SA_OldNamecall = SA_HookMeta(game, "__namecall", SA_Closure(SA_NamecallHook))
-        SA_NamecallHooked = SA_OldNamecall ~= nil
+        local ok, old, usedGhost = SA_InstallMeta(game, "__namecall", SA_Closure(SA_NamecallHook), ghost)
+        SA_NamecallHooked, SA_OldNamecall, SA_NamecallGhost = ok, old, usedGhost
     elseif not wantNamecall and SA_NamecallHooked then
-        SA_HookMeta(game, "__namecall", SA_OldNamecall)
-        SA_OldNamecall = nil
-        SA_NamecallHooked = false
+        SA_RestoreMeta(game, "__namecall", SA_OldNamecall, SA_NamecallGhost)
+        SA_OldNamecall, SA_NamecallHooked, SA_NamecallGhost = nil, false, false
     end
 
     local wantIndex = getgenv().SilentAim_Ativo and SA_Methods.MouseHit
+    if SA_IndexHooked and SA_IndexGhost ~= ghost then
+        SA_RestoreMeta(game, "__index", SA_OldIndex, SA_IndexGhost)
+        SA_OldIndex, SA_IndexHooked, SA_IndexGhost = nil, false, false
+    end
     if wantIndex and not SA_IndexHooked then
-        SA_OldIndex = SA_HookMeta(game, "__index", SA_Closure(SA_IndexHook))
-        SA_IndexHooked = SA_OldIndex ~= nil
+        local ok, old, usedGhost = SA_InstallMeta(game, "__index", SA_Closure(SA_IndexHook), ghost)
+        SA_IndexHooked, SA_OldIndex, SA_IndexGhost = ok, old, usedGhost
     elseif not wantIndex and SA_IndexHooked then
-        SA_HookMeta(game, "__index", SA_OldIndex)
-        SA_OldIndex = nil
-        SA_IndexHooked = false
+        SA_RestoreMeta(game, "__index", SA_OldIndex, SA_IndexGhost)
+        SA_OldIndex, SA_IndexHooked, SA_IndexGhost = nil, false, false
     end
 end
 
@@ -2053,6 +2108,11 @@ SAConfig:AddToggle({
     Flag = "SAConfig_FireFuncCheck", Name = "Fire Func Check", Default = false, Callback = function(v) getgenv().SilentAim_FireFunc = v end });
 SAConfig:AddToggle({
     Flag = "SAConfig_IncluirNPCs", Name = "Incluir NPCs", Default = true, Callback = function(v) getgenv().SilentAim_NPCs = v end });
+SAConfig:AddToggle({
+    Flag = "SAConfig_GhostMode", Name = "Ghost Mode (Indetectável)", Default = false, Callback = function(v)
+        getgenv().SilentAim_GhostMode = v
+        SA_UpdateHooks()
+    end });
 SAConfig:AddDropdown({
     Flag = "SAConfig_PartedoAlvo",
     Name = "Parte do Alvo",
@@ -2089,6 +2149,7 @@ SAVisual:AddDropdown({
 });
 SAVisual:AddParagraph({ Title = "Métodos seguros:", Content = "Raycast, FindPartOnRay*" });
 SAVisual:AddParagraph({ Title = "Métodos arriscados:", Content = "ViewportPointToRay, ScreenPointToRay, Mouse.Hit" });
+SAConfig:AddParagraph({ Title = "Ghost Mode:", Content = "Instala o hook na metatable (sem hookmetamethod). Requer getrawmetatable + setreadonly no executor; sem eles cai no método normal." });
 end
 
 
