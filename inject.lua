@@ -3281,7 +3281,7 @@ function FiveSync:_AddColorPickerPanel(Button: ImageButton , Callback: (Color: C
 			end;
 
 			SPAWN_THREAD = task.spawn(function()
-				while true do task.wait(FiveSync.PerformanceMode and FiveSync.MobileConfig.ColorPickerDelay or 0.00001)
+				while true do task.wait(FiveSync.PerformanceMode and FiveSync.MobileConfig.ColorPickerDelay or 0.01)
 					if not Args.IsHold then
 						break;	
 					end;
@@ -3516,7 +3516,7 @@ function FiveSync:_DrawKeybinds(Window: ScreenGui)
 	};
 
 	Ref.THREAD = task.spawn(function()
-		while true do task.wait(FiveSync.PerformanceMode and FiveSync.MobileConfig.KeybindsDelay or 0)
+		while true do task.wait(FiveSync.PerformanceMode and FiveSync.MobileConfig.KeybindsDelay or 0.05)
 			FiveSync:_Animation(MainFrame,TweenInfo.new(0.4),{
 				Size = UDim2.new(1, 30, 1, UIListLayout.AbsoluteContentSize.Y + 1)
 			});
@@ -10217,11 +10217,14 @@ function FiveSync.new(Config : Window)
 		});
 
 		while true do task.wait(WindowArgs.PerformanceMode and FiveSync.MobileConfig.MainLoopDelay or 0.01);
-			if WindowArgs.PerformanceMode and not WindowArgs.IsOpen then
+			if not WindowArgs.IsOpen then
+				-- Janela fechada: so importa manter a selecao escondida. Sem
+				-- trabalho pesado e com espera maior (vale tambem no desktop).
 				FiveSync:_Animation(SelectionFrame , TweenInfo.new(0.15) , {
 					BackgroundTransparency = 1
 				});
 
+				task.wait(WindowArgs.PerformanceMode and FiveSync.MobileConfig.MainLoopDelay or 0.1);
 				continue;
 			end;
 
