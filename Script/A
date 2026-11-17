@@ -2478,8 +2478,11 @@ local Config = {
     Tracer = { Enabled = false, Origin = "Bottom", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1 },
     Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1 },
     Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1,
-             TextOutline = true, Shadow = false },
+             TextOutline = true, Shadow = false, Background = false, BackgroundColor = Color3.fromRGB(0, 0, 0),
+             BackgroundTransparency = 0.4 },
     Skeleton = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1 },
+    Arrow = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1, Gap = 8 },
+    Circle = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Filled = false },
     FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela" },
     Rainbow = { Enabled = false, Speed = 0.05, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true, ApplyToSkeleton = true, ApplyToFOVLine = true }
 }
@@ -2515,6 +2518,16 @@ end
 -- ficam guardadas nesta tabela indexada pelo texto principal.
 local TextShadows = {}
 
+-- Fundo (caixa colorida) de cada texto, também indexado pelo texto principal.
+local TextBackgrounds = {}
+
+-- Cria um fundo (Square) para um texto e o registra em TextBackgrounds.
+local function MakeTextBackground(t)
+    local bg = CreateDrawing("Square", { Filled = true, Visible = false, Transparency = 1 })
+    TextBackgrounds[t] = bg
+    return bg
+end
+
 -- Aplica contorno nativo (Outline) e uma sombra opcional (segundo texto
 -- deslocado atrás do principal) ao texto do ESP.
 local function StyleText(t, color, size, transparency)
@@ -2541,15 +2554,38 @@ local function StyleText(t, color, size, transparency)
     end
 end
 
+-- Desenha o fundo do texto (caixa colorida atrás) quando ligado, ou o esconde.
+-- O tamanho é estimado a partir do texto e da fonte, sem depender de TextService.
+local function StyleTextBackground(t, size)
+    local bg = TextBackgrounds[t]
+    if not bg then return end
+    if not Config.Info.Background or not t.Visible then
+        bg.Visible = false
+        return
+    end
+    local text = tostring(t.Text or "")
+    local w = (#text * size * 0.58) + 6
+    local h = size + 4
+    bg.Position = Vector2.new(t.Position.X - w / 2, t.Position.Y - h / 2)
+    bg.Size = Vector2.new(w, h)
+    bg.Color = Config.Info.BackgroundColor
+    bg.Transparency = Config.Info.BackgroundTransparency
+    bg.Visible = true
+end
+
 local function HideText(t)
     t.Visible = false
     local sh = TextShadows[t]
     if sh then sh.Visible = false end
+    local bg = TextBackgrounds[t]
+    if bg then bg.Visible = false end
 end
 
 local function RemoveTextShadow(t)
     local sh = TextShadows[t]
     if sh then sh.Visible = false; sh:Remove(); TextShadows[t] = nil end
+    local bg = TextBackgrounds[t]
+    if bg then bg.Visible = false; bg:Remove(); TextBackgrounds[t] = nil end
 end
 
 -- Função de Limpeza Absoluta (Garante que nada fique na tela)
@@ -2585,6 +2621,9 @@ local function ClearESP(player)
             if data.Skeleton then
                 for _, line in pairs(data.Skeleton) do line.Visible = false; line:Remove() end
             end
+            -- Remove Seta e Círculo
+            if data.Arrow then data.Arrow.Visible = false; data.Arrow:Remove() end
+            if data.Circle then data.Circle.Visible = false; data.Circle:Remove() end
         end)
         ESP_Cache[player] = nil
     end
@@ -2608,9 +2647,19 @@ local function InitPlayerESP(player)
     data.Item = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
     data.HealthBar = CreateDrawing("Square", {Filled = true, Visible = false})
     data.HealthBarOutline = CreateDrawing("Square", {Filled = false, Color = Color3.new(0,0,0), Visible = false})
+    data.HealthBarBackground = CreateDrawing("Square", {Filled = true, Color = Color3.new(0,0,0), Visible = false})
     data.HealthText = CreateDrawing("Text", {Size = 14, Center = true, Outline = true, Visible = false})
     data.Box3D = {}
     for i = 1, 12 do data.Box3D[i] = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1}) end
+    -- Faces preenchidas do modo 3D (criadas sob demanda quando o preenchimento liga)
+    data.Box3DFill = {}
+    -- Seta na cabeça (triângulo preenchido) e círculo nos pés (tamanho da hitbox)
+    data.Arrow = CreateDrawing("Triangle", {Filled = true, Visible = false, Transparency = 1})
+    data.Circle = CreateDrawing("Circle", {Thickness = 1, NumSides = 60, Filled = false, Visible = false, Transparency = 1})
+    -- Fundo (caixa) dos textos, usado quando "Fundo do Texto" está ligado
+    for _, t in ipairs({ data.Name, data.Distance, data.Item, data.HealthText }) do
+        MakeTextBackground(t)
+    end
     
     ESP_Cache[player] = data
 end
@@ -2674,6 +2723,61 @@ end
 
 -- Desenha a caixa do ESP no modo pedido. "3D" projeta as 8 arestas do
 -- bounding box real do personagem, então a caixa gira junto com a câmera.
+-- Preenche um retângulo em espaço de tela (modos Full e Corner). Aplica o
+-- gradiente quando ligado, senão um preenchimento sólido.
+local function DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
+    if not Config.Box.Fill then
+        data.BoxFill.Visible = false
+        for _, g in pairs(data.BoxGradient) do g.Visible = false end
+        return
+    end
+    if Config.Box.Gradient then
+        local gColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.GradientColor
+        local steps = 24
+        local stepH = height / steps
+        local gTop = Config.Box.GradientTransparency
+        local gBot = 1
+        data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, gTop, true
+        data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
+        for st = 1, steps do
+            local tt = (st - 1) / (steps - 1)
+            local g = data.BoxGradient["Step"..st]
+            if not g then g = CreateDrawing("Square", { Filled = true, Visible = false }); data.BoxGradient["Step"..st] = g end
+            g.Position = Vector2.new(x, y + (st - 1) * stepH)
+            g.Size = Vector2.new(width, stepH + 1)
+            g.Color = fillColor:Lerp(gColor, tt)
+            g.Transparency = gTop + (gBot - gTop) * tt
+            g.Visible = true
+        end
+    else
+        data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
+        data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, Config.Box.FillTransparency, true
+        for _, g in pairs(data.BoxGradient) do g.Visible = false end
+    end
+end
+
+-- Preenche as 6 faces do bounding box 3D com Quads (modo 3D). Sem gradiente:
+-- as faces giram com a câmera e o preenchimento acompanha os vértices.
+local function Draw3DFill(data, pts, fillColor)
+    local faces = {
+        {1,2,3,4}, {5,6,7,8},   -- baixo, cima
+        {1,2,6,5}, {3,4,8,7},   -- frente, trás
+        {1,4,8,5}, {2,3,7,6},   -- esquerda, direita
+    }
+    if not Config.Box.Fill then
+        for _, q in pairs(data.Box3DFill) do q.Visible = false end
+        return
+    end
+    for i, f in ipairs(faces) do
+        local q = data.Box3DFill[i]
+        if not q then q = CreateDrawing("Quad", { Filled = true, Visible = false }); data.Box3DFill[i] = q end
+        q.PointA, q.PointB, q.PointC, q.PointD = pts[f[1]], pts[f[2]], pts[f[3]], pts[f[4]]
+        q.Color, q.Transparency, q.Visible = fillColor, Config.Box.FillTransparency, true
+    end
+end
+
+-- Desenha a caixa do ESP no modo pedido. "3D" projeta as 8 arestas do
+-- bounding box real do personagem, então a caixa gira junto com a câmera.
 local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillColor, rainbowColor)
     if mode == "3D" then
         for i = 1, 8 do data.Box["Line"..i].Visible = false end
@@ -2703,8 +2807,10 @@ local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillC
             l.From, l.To = pts[e[1]], pts[e[2]]
             l.Color, l.Thickness, l.Transparency, l.Visible = boxColor, Config.Box.Thickness, Config.Box.Transparency, anyOn
         end
+        Draw3DFill(data, pts, fillColor)
     else
         if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
+        if data.Box3DFill then for _, q in pairs(data.Box3DFill) do q.Visible = false end end
 
         if mode == "Full" then
             data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + width, y)
@@ -2716,35 +2822,8 @@ local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillC
                 l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency
             end
             for i = 5, 8 do data.Box["Line"..i].Visible = false end
-
-            if Config.Box.Fill then
-                data.BoxFill.Position, data.BoxFill.Size = Vector2.new(x, y), Vector2.new(width, height)
-                data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, Config.Box.FillTransparency, true
-            else
-                data.BoxFill.Visible = false
-            end
-
-            if Config.Box.Fill and Config.Box.Gradient then
-                local gColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.GradientColor
-                local steps = 24
-                local stepH = height / steps
-                local gTop = Config.Box.GradientTransparency
-                local gBot = 1
-                data.BoxFill.Color, data.BoxFill.Transparency, data.BoxFill.Visible = fillColor, gTop, true
-                for st = 1, steps do
-                    local tt = (st - 1) / (steps - 1)
-                    local g = data.BoxGradient["Step"..st]
-                    if not g then g = CreateDrawing("Square", { Filled = true, Visible = false }); data.BoxGradient["Step"..st] = g end
-                    g.Position = Vector2.new(x, y + (st - 1) * stepH)
-                    g.Size = Vector2.new(width, stepH + 1)
-                    g.Color = fillColor:Lerp(gColor, tt)
-                    g.Transparency = gTop + (gBot - gTop) * tt
-                    g.Visible = true
-                end
-            else
-                for _, g in pairs(data.BoxGradient) do g.Visible = false end
-            end
-        else -- Corner
+            DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
+        else -- Corner: desenha os 8 cantos e preenche o retângulo inteiro
             local cl = width * Config.Box.CornerScale
             data.Box.Line1.From, data.Box.Line1.To = Vector2.new(x, y), Vector2.new(x + cl, y)
             data.Box.Line2.From, data.Box.Line2.To = Vector2.new(x, y), Vector2.new(x, y + cl)
@@ -2758,8 +2837,7 @@ local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillC
                 local l = data.Box["Line"..i]
                 l.Visible, l.Color, l.Thickness, l.Transparency = true, boxColor, Config.Box.Thickness, Config.Box.Transparency
             end
-            data.BoxFill.Visible = false
-            for _, g in pairs(data.BoxGradient) do g.Visible = false end
+            DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
         end
     end
 end
@@ -2778,6 +2856,9 @@ local function ESP_HideAll()
             data.HealthBar.Visible = false
             data.HealthBarOutline.Visible = false
             data.HealthText.Visible = false
+            if data.HealthBarBackground then data.HealthBarBackground.Visible = false end
+            if data.Arrow then data.Arrow.Visible = false end
+            if data.Circle then data.Circle.Visible = false end
             for _, v in pairs(data.Skeleton) do v.Visible = false end
         end)
     end
@@ -2847,7 +2928,33 @@ local function ESP_Render()
                     data.BoxFill.Visible = false
                     for _, g in pairs(data.BoxGradient) do g.Visible = false end
                     if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
+                    if data.Box3DFill then for _, q in pairs(data.Box3DFill) do q.Visible = false end end
                 end
+
+                -- Seta ESP (triângulo preenchido apontando para a cabeça)
+                if Config.Arrow.Enabled then
+                    local asz = Config.Arrow.Size
+                    local tip = Vector2.new(headPos.X, headPos.Y - Config.Arrow.Gap)
+                    local bl = Vector2.new(headPos.X - asz / 2, tip.Y - asz)
+                    local br = Vector2.new(headPos.X + asz / 2, tip.Y - asz)
+                    data.Arrow.PointA, data.Arrow.PointB, data.Arrow.PointC = tip, bl, br
+                    data.Arrow.Color = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Arrow.Color
+                    data.Arrow.Transparency = Config.Arrow.Transparency
+                    data.Arrow.Filled = true
+                    data.Arrow.Visible = true
+                else data.Arrow.Visible = false end
+
+                -- Circle ESP (círculo nos pés com o tamanho da hitbox)
+                if Config.Circle.Enabled then
+                    data.Circle.Position = Vector2.new(headPos.X, y + height)
+                    data.Circle.Radius = math.max(2, width / 2)
+                    data.Circle.Color = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Circle.Color
+                    data.Circle.Thickness = Config.Circle.Thickness
+                    data.Circle.Transparency = Config.Circle.Transparency
+                    data.Circle.Filled = Config.Circle.Filled
+                    data.Circle.NumSides = 60
+                    data.Circle.Visible = true
+                else data.Circle.Visible = false end
 
                 -- Tracer Render
                 if Config.Tracer.Enabled then
@@ -2856,54 +2963,67 @@ local function ESP_Render()
                 else data.Tracer.Visible = false end
 
                 -- Info Render
+                -- Layout: acima da box -> Nome, Vida (modo texto);
+                --         abaixo da box -> Arma, Distância.
                 local scale = Config.DynamicScaling and math.max(0.4, 1 - (distance/Config.MaxDistance)) or 1
                 local ts = Config.Info.Size * scale
-                local off = y - 5
-                
+                local topOff = y - 5
+                local botOff = y + height + 5
+
+                -- Acima da box: Nome no topo e Vida (modo texto) logo abaixo,
+                -- mais perto da box. A Vida é posicionada primeiro e o Nome
+                -- ocupa a linha de cima.
+                if Config.Life.Enabled and Config.Life.Type == "Text" then
+                    data.HealthText.Text = math.floor(hum.Health).." HP"
+                    data.HealthText.Position = Vector2.new(headPos.X, topOff - ts)
+                    data.HealthText.Visible = true
+                    StyleText(data.HealthText, textColor, ts, Config.Life.Transparency)
+                    StyleTextBackground(data.HealthText, ts)
+                    topOff = topOff - ts - 2
+                else HideText(data.HealthText) end
+
                 if Config.Info.Name then
                     data.Name.Text = player.DisplayName or player.Name
-                    data.Name.Position = Vector2.new(headPos.X, off - ts)
+                    data.Name.Position = Vector2.new(headPos.X, topOff - ts)
                     data.Name.Visible = true
                     StyleText(data.Name, textColor, ts, Config.Info.Transparency)
-                    off = off - ts - 2
+                    StyleTextBackground(data.Name, ts)
+                    topOff = topOff - ts - 2
                 else HideText(data.Name) end
-
-                if Config.Info.Distance then
-                    data.Distance.Text = string.format("%dM", math.floor(distance))
-                    data.Distance.Position = Vector2.new(headPos.X, off - ts)
-                    data.Distance.Visible = true
-                    StyleText(data.Distance, textColor, ts, Config.Info.Transparency)
-                    off = off - ts - 2
-                else HideText(data.Distance) end
 
                 if Config.Info.Item then
                     local tool = char:FindFirstChildOfClass("Tool") or player.Backpack:FindFirstChildOfClass("Tool")
                     if tool then
                         data.Item.Text = tool.Name
-                        data.Item.Position = Vector2.new(headPos.X, off - ts)
+                        data.Item.Position = Vector2.new(headPos.X, botOff + ts)
                         data.Item.Visible = true
                         StyleText(data.Item, textColor, ts, Config.Info.Transparency)
+                        StyleTextBackground(data.Item, ts)
+                        botOff = botOff + ts + 2
                     else HideText(data.Item) end
                 else HideText(data.Item) end
 
-                -- Life Render
+                if Config.Info.Distance then
+                    data.Distance.Text = string.format("%dM", math.floor(distance))
+                    data.Distance.Position = Vector2.new(headPos.X, botOff + ts)
+                    data.Distance.Visible = true
+                    StyleText(data.Distance, textColor, ts, Config.Info.Transparency)
+                    StyleTextBackground(data.Distance, ts)
+                    botOff = botOff + ts + 2
+                else HideText(data.Distance) end
+
+                -- Life Render (barra ao lado da box; o texto foi tratado acima)
                 if Config.Life.Enabled then
                     local hp = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
                     if Config.Life.Type == "Bar" then
                         data.HealthBarOutline.Position, data.HealthBarOutline.Size, data.HealthBarOutline.Transparency, data.HealthBarOutline.Visible = Vector2.new(x - 7, y), Vector2.new(5, height), Config.Life.Transparency, true
                         data.HealthBarBackground.Position, data.HealthBarBackground.Size, data.HealthBarBackground.Transparency, data.HealthBarBackground.Visible = Vector2.new(x - 6, y + 1), Vector2.new(3, height - 2), 0.7, true
                         data.HealthBar.Position, data.HealthBar.Size, data.HealthBar.Color, data.HealthBar.Transparency, data.HealthBar.Visible = Vector2.new(x - 6, y + 1 + ((height - 2) * (1 - hp))), Vector2.new(3, (height - 2) * hp), Color3.fromRGB(255,0,0):lerp(Color3.fromRGB(0,255,0), hp), Config.Life.Transparency, true
-                        HideText(data.HealthText)
                     else
-                        data.HealthText.Text = math.floor(hum.Health).." HP"
-                        data.HealthText.Position = Vector2.new(headPos.X, y + height + 5)
-                        data.HealthText.Visible = true
-                        StyleText(data.HealthText, textColor, ts, Config.Life.Transparency)
                         data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
                     end
                 else
                     data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
-                    HideText(data.HealthText)
                 end
 
                 -- Skeleton Render
@@ -2933,6 +3053,9 @@ local function ESP_Render()
                 for _, t in ipairs({ data.Name, data.Distance, data.Item, data.HealthText }) do HideText(t) end
                 for _, v in pairs(data.Skeleton) do v.Visible = false end
                 if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
+                if data.Box3DFill then for _, q in pairs(data.Box3DFill) do q.Visible = false end end
+                if data.Arrow then data.Arrow.Visible = false end
+                if data.Circle then data.Circle.Visible = false end
             end
         end)
     end
@@ -3069,6 +3192,35 @@ SecInfo:AddToggle({
     Flag = "SecInfo_SombraTexto", Name = "Sombra do Texto", Default = false, Callback = function(v) Config.Info.Shadow = v end });
 SecInfo:AddColorPicker({
     Flag = "SecInfo_CordoTexto", Name = "Cor do Texto", Default = Config.Info.Color, Callback = function(v) Config.Info.Color = v end });
+SecInfo:AddToggle({
+    Flag = "SecInfo_FundoTexto", Name = "Fundo do Texto", Default = false, Callback = function(v) Config.Info.Background = v end }).Link:AddColorPicker({
+    Flag = "SecInfo_CorFundo", Default = Config.Info.BackgroundColor, Callback = function(v) Config.Info.BackgroundColor = v end });
+SecInfo:AddSlider({
+    Flag = "SecInfo_TranspFundo", Name = "Transp. Fundo", Min = 0, Max = 1, Default = 0.4, Round = 2, Callback = function(v) Config.Info.BackgroundTransparency = v end });
+
+-- Seção Seta ESP (triângulo na cabeça do alvo)
+local SecArrow = Tab:DrawSection({ Name = "Seta ESP", Position = 'left' });
+SecArrow:AddToggle({
+    Flag = "SecArrow_AtivarSeta", Name = "Ativar Seta", Callback = function(v) Config.Arrow.Enabled = v end }).Link:AddColorPicker({
+    Flag = "SecArrow_Cor", Default = Config.Arrow.Color, Callback = function(v) Config.Arrow.Color = v end });
+SecArrow:AddSlider({
+    Flag = "SecArrow_Tamanho", Name = "Tamanho", Min = 6, Max = 40, Default = 14, Callback = function(v) Config.Arrow.Size = v end });
+SecArrow:AddSlider({
+    Flag = "SecArrow_Distncia", Name = "Distância da Cabeça", Min = 0, Max = 40, Default = 8, Callback = function(v) Config.Arrow.Gap = v end });
+SecArrow:AddSlider({
+    Flag = "SecArrow_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Arrow.Transparency = v end });
+
+-- Seção Circle ESP (círculo nos pés, do tamanho da hitbox)
+local SecCircle = Tab:DrawSection({ Name = "Circle ESP", Position = 'left' });
+SecCircle:AddToggle({
+    Flag = "SecCircle_AtivarCirculo", Name = "Ativar Círculo", Callback = function(v) Config.Circle.Enabled = v end }).Link:AddColorPicker({
+    Flag = "SecCircle_Cor", Default = Config.Circle.Color, Callback = function(v) Config.Circle.Color = v end });
+SecCircle:AddToggle({
+    Flag = "SecCircle_Preenchido", Name = "Preenchido", Default = false, Callback = function(v) Config.Circle.Filled = v end });
+SecCircle:AddSlider({
+    Flag = "SecCircle_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Circle.Thickness = v end });
+SecCircle:AddSlider({
+    Flag = "SecCircle_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Circle.Transparency = v end });
 
 -- Seção Esqueleto
 local SecSkel = Tab:DrawSection({ Name = "Esqueleto", Position = 'left' });
@@ -3487,7 +3639,7 @@ do
         { Id = "Hitbox",     Flag = "Combat_HitboxEnabled",     Label = "HITBOX" },
         { Id = "ESP",        Flag = "SecMain_AtivarESP",        Label = "ESP" },
         { Id = "FullBright", Flag = "VisualSection_FullBright", Label = "LIGHT" },
-        { Id = "AddWL",      Label = "ADD WL", Action = function()
+        { Id = "AddWL",      Label = "ADD WL", DefaultVisible = true, Action = function()
             if getgenv().E34x_AddAimTargetToWhitelist then getgenv().E34x_AddAimTargetToWhitelist() end
         end },
     }
@@ -3608,7 +3760,7 @@ do
         frame.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
         frame.BackgroundTransparency = 0.4
         frame.BorderSizePixel = 0
-        frame.Visible = false
+        frame.Visible = def.DefaultVisible == true
         frame.Parent = root
 
         local corner = Instance.new("UICorner")
@@ -3644,7 +3796,9 @@ do
         }
 
         if saved then
-            frame.Visible = saved.Visible == true
+            if saved.Visible ~= nil then
+                frame.Visible = saved.Visible == true
+            end
             if type(saved.Pos) == "table" then
                 entry.Pos = UDim2.new(saved.Pos[1] or 0, saved.Pos[2] or 0, saved.Pos[3] or 0, saved.Pos[4] or 0)
                 frame.Position = entry.Pos
