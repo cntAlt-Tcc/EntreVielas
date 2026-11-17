@@ -2616,6 +2616,7 @@ local function ClearESP(player)
             -- Remove Vida
             if data.HealthBar then data.HealthBar.Visible = false; data.HealthBar:Remove() end
             if data.HealthBarOutline then data.HealthBarOutline.Visible = false; data.HealthBarOutline:Remove() end
+            if data.HealthBarBackground then data.HealthBarBackground.Visible = false; data.HealthBarBackground:Remove() end
             if data.HealthText then data.HealthText.Visible = false; RemoveTextShadow(data.HealthText); data.HealthText:Remove() end
             for _, t in ipairs({ data.Name, data.Distance, data.Item }) do
                 if t then RemoveTextShadow(t) end
@@ -2626,7 +2627,8 @@ local function ClearESP(player)
             end
             -- Remove Seta e Círculo
             if data.Arrow then data.Arrow.Visible = false; data.Arrow:Remove() end
-            if data.Circle then data.Circle.Visible = false; data.Circle:Remove() end
+            if data.Circle3D then for _, l in pairs(data.Circle3D) do l.Visible = false; l:Remove() end end
+            if data.Circle3DFill then for _, q in pairs(data.Circle3DFill) do q.Visible = false; q:Remove() end end
         end)
         ESP_Cache[player] = nil
     end
@@ -2656,9 +2658,11 @@ local function InitPlayerESP(player)
     for i = 1, 12 do data.Box3D[i] = CreateDrawing("Line", {Thickness = 1, Visible = false, Transparency = 1}) end
     -- Faces preenchidas do modo 3D (criadas sob demanda quando o preenchimento liga)
     data.Box3DFill = {}
-    -- Seta na cabeça (triângulo preenchido) e círculo nos pés (tamanho da hitbox)
+    -- Seta na cabeça (triângulo preenchido) e círculo 3D nos pés (anel no chão,
+    -- projetado do mundo como o Box 3D; as linhas são criadas sob demanda).
     data.Arrow = CreateDrawing("Triangle", {Filled = true, Visible = false, Transparency = 1})
-    data.Circle = CreateDrawing("Circle", {Thickness = 1, NumSides = 60, Filled = false, Visible = false, Transparency = 1})
+    data.Circle3D = {}
+    data.Circle3DFill = {}
     -- Fundo (caixa) dos textos, usado quando "Fundo do Texto" está ligado
     for _, t in ipairs({ data.Name, data.Distance, data.Item, data.HealthText }) do
         MakeTextBackground(t)
@@ -2779,6 +2783,51 @@ local function Draw3DFill(data, pts, fillColor)
     end
 end
 
+-- Número de segmentos do anel do Circle ESP 3D (quanto maior, mais suave).
+local CIRCLE_SEGMENTS = 32
+
+-- Desenha o Circle ESP como um anel horizontal no chão, projetado a partir do
+-- mundo (como o Box 3D). O anel fica sempre no plano XZ, então acompanha a
+-- perspectiva e o personagem permanece dentro dele, independente da câmera.
+-- Quando "Preenchido" está ligado, preenche o disco com um leque de triângulos.
+local function DrawCircle3D(data, char, color)
+    local cf, size = char:GetBoundingBox()
+    local feetY = cf.Position.Y - size.Y / 2 + 0.05
+    local radius = math.max(size.X, size.Z) / 2
+    local cx, cz = cf.Position.X, cf.Position.Z
+
+    local pts, anyOn = {}, false
+    for i = 1, CIRCLE_SEGMENTS do
+        local ang = (i - 1) / CIRCLE_SEGMENTS * math.pi * 2
+        local wp = Vector3.new(cx + math.cos(ang) * radius, feetY, cz + math.sin(ang) * radius)
+        local vp, on = Camera:WorldToViewportPoint(wp)
+        pts[i] = Vector2.new(vp.X, vp.Y)
+        if on and vp.Z > 0 then anyOn = true end
+    end
+
+    for i = 1, CIRCLE_SEGMENTS do
+        local l = data.Circle3D[i]
+        if not l then l = CreateDrawing("Line", { Thickness = 1, Visible = false, Transparency = 1 }); data.Circle3D[i] = l end
+        local j = i % CIRCLE_SEGMENTS + 1
+        l.From, l.To = pts[i], pts[j]
+        l.Color, l.Thickness, l.Transparency, l.Visible = color, Config.Circle.Thickness, Config.Circle.Transparency, anyOn
+    end
+
+    if Config.Circle.Filled then
+        local centerVp, centerOn = Camera:WorldToViewportPoint(Vector3.new(cx, feetY, cz))
+        local center = Vector2.new(centerVp.X, centerVp.Y)
+        for i = 1, CIRCLE_SEGMENTS do
+            local tri = data.Circle3DFill[i]
+            if not tri then tri = CreateDrawing("Triangle", { Filled = true, Visible = false }); data.Circle3DFill[i] = tri end
+            local j = i % CIRCLE_SEGMENTS + 1
+            tri.PointA, tri.PointB, tri.PointC = center, pts[i], pts[j]
+            tri.Color, tri.Transparency, tri.Visible = color, Config.Circle.Transparency, (anyOn and centerOn)
+        end
+    else
+        for _, tri in pairs(data.Circle3DFill) do tri.Visible = false end
+    end
+end
+
 -- Desenha a caixa do ESP no modo pedido. "3D" projeta as 8 arestas do
 -- bounding box real do personagem, então a caixa gira junto com a câmera.
 local function DrawESPBox(data, mode, char, x, y, width, height, boxColor, fillColor, rainbowColor)
@@ -2853,15 +2902,16 @@ local function ESP_HideAll()
             if data.BoxGradient then for _, g in pairs(data.BoxGradient) do g.Visible = false end end
             if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
             data.Tracer.Visible = false
-            data.Name.Visible = false
-            data.Distance.Visible = false
-            data.Item.Visible = false
+            HideText(data.Name)
+            HideText(data.Distance)
+            HideText(data.Item)
+            HideText(data.HealthText)
             data.HealthBar.Visible = false
             data.HealthBarOutline.Visible = false
-            data.HealthText.Visible = false
             if data.HealthBarBackground then data.HealthBarBackground.Visible = false end
             if data.Arrow then data.Arrow.Visible = false end
-            if data.Circle then data.Circle.Visible = false end
+            if data.Circle3D then for _, l in pairs(data.Circle3D) do l.Visible = false end end
+            if data.Circle3DFill then for _, q in pairs(data.Circle3DFill) do q.Visible = false end end
             for _, v in pairs(data.Skeleton) do v.Visible = false end
         end)
     end
@@ -2947,17 +2997,13 @@ local function ESP_Render()
                     data.Arrow.Visible = true
                 else data.Arrow.Visible = false end
 
-                -- Circle ESP (círculo nos pés com o tamanho da hitbox)
+                -- Circle ESP 3D: anel horizontal no chão, projetado do mundo
                 if Config.Circle.Enabled then
-                    data.Circle.Position = Vector2.new(headPos.X, y + height)
-                    data.Circle.Radius = math.max(2, width / 2)
-                    data.Circle.Color = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Circle.Color
-                    data.Circle.Thickness = Config.Circle.Thickness
-                    data.Circle.Transparency = Config.Circle.Transparency
-                    data.Circle.Filled = Config.Circle.Filled
-                    data.Circle.NumSides = 60
-                    data.Circle.Visible = true
-                else data.Circle.Visible = false end
+                    DrawCircle3D(data, char, (Config.Rainbow.Enabled and Config.Rainbow.ApplyToText) and rainbowColor or Config.Circle.Color)
+                else
+                    for _, l in pairs(data.Circle3D) do l.Visible = false end
+                    for _, tri in pairs(data.Circle3DFill) do tri.Visible = false end
+                end
 
                 -- Tracer Render
                 if Config.Tracer.Enabled then
@@ -3058,7 +3104,8 @@ local function ESP_Render()
                 if data.Box3D then for _, v in pairs(data.Box3D) do v.Visible = false end end
                 if data.Box3DFill then for _, q in pairs(data.Box3DFill) do q.Visible = false end end
                 if data.Arrow then data.Arrow.Visible = false end
-                if data.Circle then data.Circle.Visible = false end
+                if data.Circle3D then for _, l in pairs(data.Circle3D) do l.Visible = false end end
+                if data.Circle3DFill then for _, q in pairs(data.Circle3DFill) do q.Visible = false end end
             end
         end)
     end
