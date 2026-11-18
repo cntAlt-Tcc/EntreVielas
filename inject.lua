@@ -489,6 +489,55 @@ FiveSync.IaDrag = false;
 FiveSync.LastDrag = tick();
 FiveSync.Flags = {};
 
+-- Config-load coordination. While a saved config is being applied, features that
+-- install runtime state (metamethod hooks, listeners) must NOT react to the
+-- intermediate values the load walks through: doing so re-installs hooks for a
+-- state that is about to change and trips "IndexInstance"-style detectors.
+-- `__ConfigLoading` lets a feature skip work mid-load; `__OnConfigLoad` runs once
+-- after the load so each feature re-syncs with the final values.
+FiveSync.__ConfigLoading = false;
+FiveSync.__OnConfigLoad = {};
+
+function FiveSync:AddOnConfigLoad(fn)
+    table.insert(FiveSync.__OnConfigLoad, fn);
+end;
+
+-- Window preferences (menu key, etc.) persisted independently of named configs so
+-- they survive a re-execute without the user having to save/load a config.
+-- `SetMenuKeyPersist` opts a window into this file; the library reads it when the
+-- window is built and writes it whenever the menu key changes.
+function FiveSync:SetMenuKeyPersist(path)
+    FiveSync.__MenuKeyPath = path;
+end;
+
+function FiveSync:__ReadMenuKey()
+    local path = FiveSync.__MenuKeyPath;
+    if not path or not isfile(path) then return nil; end;
+
+    local ok, data = pcall(readfile, path);
+    if not ok or not data or data == "" then return nil; end;
+
+    local ok2, decoded = pcall(function() return HttpService:JSONDecode(data); end);
+    if ok2 and type(decoded) == "table" and type(decoded.MenuKey) == "string" then
+        return decoded.MenuKey;
+    end;
+
+    return nil;
+end;
+
+function FiveSync:__WriteMenuKey(key)
+    local path = FiveSync.__MenuKeyPath;
+    if not path then return; end;
+
+    local name = key;
+    if typeof(key) == "EnumItem" then name = key.Name; end;
+    name = tostring(name);
+
+    pcall(function()
+        writefile(path, HttpService:JSONEncode({ MenuKey = name }));
+    end);
+end;
+
 FiveSync.Lucide = {
 	['lucide-mouse-2'] = "rbxassetid://10088146939",
 	['lucide-internet'] = "rbxassetid://12785195438",
@@ -6508,6 +6557,13 @@ function FiveSync.new(Config : Window)
 		PerformanceMode = FiveSync.PerformanceMode
 	});
 
+   -- Restore the menu key the user set on a previous run (kept outside named
+   -- configs so it survives a plain re-execute).
+   local __persistedKey = FiveSync:__ReadMenuKey();
+   if __persistedKey then
+           Config.Keybind = __persistedKey;
+   end;
+
 	if Config.PerformanceMode then
 		FiveSync.PerformanceMode = true;
 	end;
@@ -10072,6 +10128,7 @@ function FiveSync.new(Config : Window)
 
 	function WindowArgs:SetMenuKey(new: string | Enum.KeyCode)
 		Config.Keybind = new;
+		FiveSync:__WriteMenuKey(new);
 	end;
 
 	-- Adds the "Menu" section used by the config tab: hide the on-screen
@@ -10426,32 +10483,60 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 	function Args:LoadConfigFromString(str: string)
 		local decoded = HttpService:JSONDecode(str);
 
+		Args:ApplyConfig(decoded);
+	end;
+
+	-- Applies a decoded config to every flagged element. Bracketed by
+	-- `FiveSync.__ConfigLoading` so features skip work that depends on the
+	-- intermediate values a load walks through (a feature must not install a
+	-- hook for a state that is about to change). `__OnConfigLoad` then runs once
+	-- with the final state so each feature re-syncs cleanly.
+	function Args:ApplyConfig(decoded)
+		if not decoded then return; end;
+
 		local Flags = FiveSync:GetConfig("KV");
 
+		FiveSync.__ConfigLoading = true;
+
 		-- Mute sounds so restoring a config does not fire a click for every element.
-		FiveSync:_MuteSounds(function()
-			for i,v in next , decoded do
-				if v and v.Flag then
+		local ok, err = pcall(function()
+			FiveSync:_MuteSounds(function()
+				for i,v in next , decoded do
+					if v and v.Flag then
 
-					local Value = Flags[v.Flag];
+						local Value = Flags[v.Flag];
 
-					if Value then
+						if Value then
 
-						if v.Value.Type == "NormalElement" then
-							Value.Functions:SetValue(v.Value.Value);
+							if v.Value.Type == "NormalElement" then
+								Value.Functions:SetValue(v.Value.Value);
 
-						elseif v.Value.Type == "ColorPicker" then
+							elseif v.Value.Type == "ColorPicker" then
 
-							local Color = Color3.new(v.Value.Color3.R,v.Value.Color3.G,v.Value.Color3.B);
+								local Color = Color3.new(v.Value.Color3.R,v.Value.Color3.G,v.Value.Color3.B);
 
-							local Transparency = v.Value.Transparency;
+								local Transparency = v.Value.Transparency;
 
-							Value.Functions:SetValue(Color , Transparency);
+								Value.Functions:SetValue(Color , Transparency);
+							end;
+							if Value.Functions.AutoKeybind and v.AutoKeybind then
+								Value.Functions.AutoKeybind:LoadSettings(v.AutoKeybind);
+							end;
 						end;
-					end;
-				end
-			end;
+					end
+				end;
+			end);
 		end);
+
+		FiveSync.__ConfigLoading = false;
+
+		for _, fn in next, FiveSync.__OnConfigLoad do
+			pcall(fn);
+		end;
+
+		if not ok then
+			error(err, 0);
+		end;
 	end;
 
 	function Args:GetCurrentConfig()
@@ -10528,8 +10613,6 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 
 			local decoded = HttpService:JSONDecode(info);
 
-			local Flags = FiveSync:GetConfig("KV");
-
 			FiveSync:_PlaySound("Config");
 
 			if Args.EnableNotify then
@@ -10540,36 +10623,7 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 				})
 			end
 
-			-- Mute sounds so restoring a config does not fire a click for every element.
-			FiveSync:_MuteSounds(function()
-				for i,v in next , decoded do
-					if v and v.Flag then
-
-						local Value = Flags[v.Flag];
-
-						if Value then
-
-							if v.Value.Type == "NormalElement" then
-								Value.Functions:SetValue(v.Value.Value);
-
-							elseif v.Value.Type == "ColorPicker" then
-
-								local Color = Color3.new(v.Value.Color3.R,v.Value.Color3.G,v.Value.Color3.B);
-
-								local Transparency = v.Value.Transparency;
-
-								Value.Functions:SetValue(Color , Transparency);
-							end;
-
-							if Value.Functions.AutoKeybind then
-								if v.AutoKeybind then
-									Value.Functions.AutoKeybind:LoadSettings(v.AutoKeybind)
-								end;
-							end;
-						end;
-					end
-				end;
-			end);
+			Args:ApplyConfig(decoded);
 		end;
 	end;
 

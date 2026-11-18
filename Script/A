@@ -37,6 +37,9 @@ local ConfigManager = FiveSync:ConfigManager({
     Directory = "E$34x",
     Config = "E$34x-Configs"
 })
+-- Persist the menu key on its own so it survives a re-execute even without a
+-- saved config being loaded.
+FiveSync:SetMenuKeyPersist("E$34x/Window.json")
 FiveSync:Loader("rbxassetid://117056629401480", 2.5).yield()
 local Window = FiveSync.new({
     Name = "E$34x",
@@ -2042,6 +2045,11 @@ end
 -- Fica sem hook nenhum quando o Silent Aim está desligado ou o método não
 -- precisa. Trocar o Ghost Mode com a mira ligada reinstala pelo novo mecanismo.
 local function SA_UpdateHooks()
+    -- During a config load every flag is written one by one; installing/removing
+    -- hooks on those intermediate values is what a detector sees as an
+    -- "IndexInstance" hook being (re)added. Skip here and let the post-load
+    -- listener re-sync once, with the final values.
+    if FiveSync.__ConfigLoading then return end
     local ghost = getgenv().SilentAim_GhostMode and true or false
     local wantNamecall = getgenv().SilentAim_Ativo and SA_NeedsNamecall()
     if SA_NamecallHooked and SA_NamecallGhost ~= ghost then
@@ -2140,9 +2148,19 @@ SAVisual:AddDropdown({
     Callback = function(selected)
         for k in pairs(SA_Methods) do SA_Methods[k] = false end
         if type(selected) == "table" then
+            -- The dropdown hands back the array form ({"Raycast"}) as its Default
+            -- and when a config restores it, and the map form ({Raycast = true})
+            -- while the user is picking. Handle both, otherwise a load wiped the
+            -- active methods and left the aim hooking nothing.
             for k, on in pairs(selected) do
-                if on then SA_Methods[k] = true end
+                if on == true then
+                    SA_Methods[k] = true
+                elseif type(k) == "number" and type(on) == "string" then
+                    SA_Methods[on] = true
+                end
             end
+        elseif type(selected) == "string" then
+            SA_Methods[selected] = true
         end
         SA_UpdateHooks()
     end
@@ -2150,6 +2168,12 @@ SAVisual:AddDropdown({
 SAVisual:AddParagraph({ Title = "Métodos seguros:", Content = "Raycast, FindPartOnRay*" });
 SAVisual:AddParagraph({ Title = "Métodos arriscados:", Content = "ViewportPointToRay, ScreenPointToRay, Mouse.Hit" });
 SAConfig:AddParagraph({ Title = "Ghost Mode:", Content = "Instala o hook na metatable (sem hookmetamethod). Requer getrawmetatable + setreadonly no executor; sem eles cai no método normal." });
+
+-- After a config load, re-sync the hooks once with the final values (the load
+-- itself skipped every SA_UpdateHooks call to avoid the detection churn).
+FiveSync:AddOnConfigLoad(function()
+    SA_SetActive(getgenv().SilentAim_Ativo)
+end)
 end
 
 
