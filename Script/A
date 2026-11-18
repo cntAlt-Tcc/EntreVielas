@@ -1264,6 +1264,10 @@ getgenv().Aimbot_FOVColor = Color3.fromRGB(255, 255, 255)
 getgenv().Aimbot_FOVRGB = false
 getgenv().Aimbot_FOVTransparency = 0.5
 getgenv().Aimbot_FOVStyle = "Círculo" -- "Círculo", "Quadrado", "Traçado", "Animado", "Nenhum"
+-- Segue o mouse: o círculo/quadrado do FOV fica no cursor em vez do centro da
+-- tela, e a mira passa a considerar como centro o mesmo ponto (senão o visual e
+-- a seleção de alvo discordariam).
+getgenv().Aimbot_FOVFollowMouse = false
 
 -- // FOV na Tela
 local FOVGui = Instance.new("ScreenGui")
@@ -1291,6 +1295,7 @@ FOVCorner.Parent = FOVFrame
 
 -- Para o estilo 'Traçado'
 local fovDrawingLines = {}
+local fovTraceOffsets = nil
 
 local function ClearTracedLines()
     for _, line in ipairs(fovDrawingLines) do
@@ -1302,7 +1307,7 @@ end
 
 local function CreateTracedLines(halfFOV, center, color, transparency, thickness)
     local lines = {}
-    local offsets = {
+    fovTraceOffsets = {
         {Vector2.new(-halfFOV, -halfFOV), Vector2.new(-halfFOV/2, -halfFOV)},
         {Vector2.new(-halfFOV, -halfFOV), Vector2.new(-halfFOV, -halfFOV/2)},
         {Vector2.new(halfFOV, -halfFOV), Vector2.new(halfFOV/2, -halfFOV)},
@@ -1312,7 +1317,7 @@ local function CreateTracedLines(halfFOV, center, color, transparency, thickness
         {Vector2.new(halfFOV, halfFOV), Vector2.new(halfFOV/2, halfFOV)},
         {Vector2.new(halfFOV, halfFOV), Vector2.new(halfFOV, halfFOV/2)}
     }
-    for _, offset in ipairs(offsets) do
+    for _, offset in ipairs(fovTraceOffsets) do
         local l = Drawing.new("Line")
         l.From = center + offset[1]
         l.To = center + offset[2]
@@ -1323,6 +1328,20 @@ local function CreateTracedLines(halfFOV, center, color, transparency, thickness
         table.insert(lines, l)
     end
     return lines
+end
+
+-- Reposiciona as linhas do estilo "Traçado" no centro atual (que pode ser o
+-- mouse quando "Seguir Mouse" está ligado) e atualiza cor/transparência.
+local function UpdateTracedLines(center, color, transparency)
+    for i, l in ipairs(fovDrawingLines) do
+        local o = fovTraceOffsets and fovTraceOffsets[i]
+        if o then
+            l.From = center + o[1]
+            l.To = center + o[2]
+        end
+        l.Color = color
+        l.Transparency = transparency
+    end
 end
 
 -- // Funções de Suporte
@@ -1348,7 +1367,7 @@ local function GetClosestPlayer()
 
     local Target = nil
     local MaxDist = getgenv().Aimbot_FOV
-    local Center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local Center = FiveSync:GetFOVCenter(getgenv().Aimbot_FOVFollowMouse and "Mouse" or "Screen")
 
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
@@ -1384,6 +1403,12 @@ local function Aimbot_Render(dt)
     FOVFrame.Visible = active
     
     if active then
+        -- Centro do FOV: cursor quando "Seguir Mouse" está ligado, senão o meio
+        -- da tela. A mira usa o mesmo centro (GetClosestPlayer), então o visual
+        -- e a seleção de alvo nunca discordam.
+        local center = FiveSync:GetFOVCenter(getgenv().Aimbot_FOVFollowMouse and "Mouse" or "Screen")
+        FOVFrame.Position = UDim2.fromOffset(center.X, center.Y)
+
         local size = getgenv().Aimbot_FOV * 2
         FOVFrame.Size = UDim2.new(0, size, 0, size)
         
@@ -1411,14 +1436,9 @@ local function Aimbot_Render(dt)
         elseif getgenv().Aimbot_FOVStyle == "Traçado" then
             FOVStroke.Enabled = false
             if #fovDrawingLines == 0 then
-                fovDrawingLines = CreateTracedLines(getgenv().Aimbot_FOV, Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2), FOVStroke.Color, trans, FOVStroke.Thickness)
+                fovDrawingLines = CreateTracedLines(getgenv().Aimbot_FOV, center, FOVStroke.Color, trans, FOVStroke.Thickness)
             else
-                -- Atualiza posições e cores das linhas
-                local color = FOVStroke.Color
-                for _, l in ipairs(fovDrawingLines) do
-                    l.Color = color
-                    l.Transparency = 1 - trans
-                end
+                UpdateTracedLines(center, FOVStroke.Color, 1 - trans)
             end
         end
     else
@@ -1495,6 +1515,8 @@ Visual:AddSlider({
     Flag = "Visual_TamanhoFOV", Name = "Tamanho FOV", Min = 10, Max = 600, Default = 150, Callback = function(v) getgenv().Aimbot_FOV = v end });
 Visual:AddDropdown({
     Flag = "Visual_EstiloFOV", Name = "Estilo FOV", Default = "Círculo", Values = {"Círculo", "Quadrado", "Traçado", "Animado", "Nenhum"}, Callback = function(v) getgenv().Aimbot_FOVStyle = v end });
+Visual:AddToggle({
+    Flag = "Visual_FOVSegueMouse", Name = "Seguir Mouse (FOV)", Default = false, Callback = function(v) getgenv().Aimbot_FOVFollowMouse = v end });
 Visual:AddColorPicker({
     Flag = "Visual_CorFOV", Name = "Cor FOV", Default = Color3.fromRGB(255,255,255), Callback = function(v) getgenv().Aimbot_FOVColor = v end });
 Visual:AddToggle({
@@ -1658,6 +1680,9 @@ getgenv().SilentAim_WallCheck  = true
 getgenv().SilentAim_FireFunc   = false
 getgenv().SilentAim_TargetPart = "Nearest" -- "Head", "HumanoidRootPart", "Nearest"
 getgenv().SilentAim_FOV        = 150
+-- Segue o mouse: o círculo do FOV e a seleção de alvo passam a usar o cursor
+-- como centro, em vez do meio da tela.
+getgenv().SilentAim_FOVFollowMouse = false
 getgenv().SilentAim_ShowFOV    = true
 getgenv().SilentAim_ShowTarget = false
 getgenv().SilentAim_HitChance  = 100
@@ -1731,7 +1756,10 @@ local function SA_FOVRender()
     if SA_FOVCircle then
         if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowFOV then
             SA_FOVCircle.Visible  = true
-            SA_FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+            -- Centro do FOV: cursor quando "Seguir Mouse" está ligado, senão o
+            -- meio da tela. É o mesmo centro usado por SA_UpdateTarget, então o
+            -- círculo desenhado sempre corresponde à área que a mira considera.
+            SA_FOVCircle.Position = FiveSync:GetFOVCenter(getgenv().SilentAim_FOVFollowMouse and "Mouse" or "Screen")
             SA_FOVCircle.Radius   = getgenv().SilentAim_FOV
             SA_FOVCircle.Color    = getgenv().Aimbot_FOVColor
         else
@@ -1823,7 +1851,7 @@ local function SA_UpdateTarget()
         return
     end
 
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local center = FiveSync:GetFOVCenter(getgenv().SilentAim_FOVFollowMouse and "Mouse" or "Screen")
     local best = nil
 
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -2137,6 +2165,8 @@ SAConfig:AddSlider({
 
 SAVisual:AddToggle({
     Flag = "SAVisual_MostrarFOV", Name = "Mostrar FOV", Default = true, Callback = function(v) getgenv().SilentAim_ShowFOV = v end });
+SAVisual:AddToggle({
+    Flag = "SAVisual_SegueMouse", Name = "Seguir Mouse (FOV)", Default = false, Callback = function(v) getgenv().SilentAim_FOVFollowMouse = v end });
 SAVisual:AddToggle({
     Flag = "SAVisual_MostrarAlvo", Name = "Mostrar Alvo", Default = false, Callback = function(v) getgenv().SilentAim_ShowTarget = v end });
 SAVisual:AddDropdown({
@@ -2810,6 +2840,11 @@ end
 -- mesmo que o alvo guardado esteja desatualizado. O wall check fica de fora:
 -- um raycast por frame adiciona custo/detectabilidade sem mudar a mira.
 local function FOVLineTargetValid(part)
+    -- A parte precisa ainda estar no jogo. Checar só part.Parent não basta: ao
+    -- sair/morrer o Model do personagem é destacado do mundo (Parent=nil) mas a
+    -- referência à parte continua válida, então a linha ficaria presa na última
+    -- posição. IsDescendantOf(game) cobre "saiu do mundo" em qualquer hierarquia.
+    if not part:IsDescendantOf(game) then return false end
     local model = part
     while model and model ~= workspace do
         if model:IsA("Model") then break end

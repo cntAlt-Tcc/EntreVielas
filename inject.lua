@@ -342,6 +342,7 @@ local TextService: TextService = cloneref(game:GetService('TextService'));
 local RunService: RunService = cloneref(game:GetService('RunService'));
 local Players: Players = cloneref(game:GetService('Players'));
 local HttpService: HttpService = cloneref(game:GetService('HttpService'));
+local GuiService: GuiService = cloneref(game:GetService('GuiService'));
 local LocalPlayer: Player = Players.LocalPlayer;
 local CoreGui: PlayerGui = (gethui and gethui()) or (get_hidden_gui and get_hidden_gui()) or cloneref(game:FindFirstChild('CoreGui')) or cloneref(LocalPlayer.PlayerGui);
 local Mouse: Mouse = LocalPlayer:GetMouse();
@@ -2033,6 +2034,22 @@ function FiveSync:Drag(InputFrame: Frame, MoveFrame: Frame, Speed : number)
 
 		FiveSync.IaDrag = dragToggle;
 	end);
+end;
+
+-- Centro do FOV. "Screen" = centro da tela; "Mouse" = cursor (o FOV fica no
+-- mouse, não no meio da tela). O inset da GUI é somado porque
+-- GetMouseLocation devolve coordenadas relativas ao topo da tela, enquanto
+-- WorldToViewportPoint já inclui a faixa superior.
+function FiveSync:GetFOVCenter(mode)
+    if mode == "Mouse" then
+        local loc = UserInputService:GetMouseLocation();
+        local ok, inset = pcall(function() return GuiService:GetGuiInset(); end);
+        if ok and inset then
+            return Vector2.new(loc.X, loc.Y + inset.Y);
+        end;
+        return loc;
+    end;
+    return Vector2.new(CurrentCamera.ViewportSize.X / 2, CurrentCamera.ViewportSize.Y / 2);
 end;
 
 function FiveSync:_IsMobile()
