@@ -511,32 +511,79 @@ function FiveSync:SetMenuKeyPersist(path)
     FiveSync.__MenuKeyPath = path;
 end;
 
-function FiveSync:__ReadMenuKey()
+function FiveSync:__ReadWindowPrefs()
     local path = FiveSync.__MenuKeyPath;
-    if not path or not isfile(path) then return nil; end;
+    if not path or not isfile(path) then return {}; end;
 
     local ok, data = pcall(readfile, path);
-    if not ok or not data or data == "" then return nil; end;
+    if not ok or not data or data == "" then return {}; end;
 
     local ok2, decoded = pcall(function() return HttpService:JSONDecode(data); end);
-    if ok2 and type(decoded) == "table" and type(decoded.MenuKey) == "string" then
-        return decoded.MenuKey;
+    if ok2 and type(decoded) == "table" then
+        return decoded;
+    end;
+
+    return {};
+end;
+
+-- Merges `fields` into the window preference file. Writing only the given keys
+-- keeps independent preferences (menu key, button position) from clobbering
+-- each other.
+function FiveSync:__WriteWindowPrefs(fields)
+    local path = FiveSync.__MenuKeyPath;
+    if not path then return; end;
+
+    local prefs = FiveSync:__ReadWindowPrefs();
+    for k, v in next, fields do
+        prefs[k] = v;
+    end;
+
+    pcall(function()
+        writefile(path, HttpService:JSONEncode(prefs));
+    end);
+end;
+
+function FiveSync:__ReadMenuKey()
+    local prefs = FiveSync:__ReadWindowPrefs();
+    if type(prefs.MenuKey) == "string" then
+        return prefs.MenuKey;
     end;
 
     return nil;
 end;
 
 function FiveSync:__WriteMenuKey(key)
-    local path = FiveSync.__MenuKeyPath;
-    if not path then return; end;
-
     local name = key;
     if typeof(key) == "EnumItem" then name = key.Name; end;
-    name = tostring(name);
 
-    pcall(function()
-        writefile(path, HttpService:JSONEncode({ MenuKey = name }));
-    end);
+    FiveSync:__WriteWindowPrefs({ MenuKey = tostring(name) });
+end;
+
+-- Where the floating menu-open button sits. `Free` lets the user drag it and
+-- stores the resulting offset; the anchored presets keep it reachable on a
+-- phone without covering the window.
+FiveSync.MenuButtonPositions = {
+    "Centro Topo",
+    "Centro Baixo",
+    "Canto Esquerdo",
+    "Canto Direito",
+    "Solto",
+};
+
+function FiveSync:__ReadMenuButtonPos()
+    local prefs = FiveSync:__ReadWindowPrefs();
+    if type(prefs.MenuButtonPos) == "string" then
+        return prefs.MenuButtonPos, prefs.MenuButtonOffset;
+    end;
+
+    return nil, nil;
+end;
+
+function FiveSync:__WriteMenuButtonPos(pos, offset)
+    FiveSync:__WriteWindowPrefs({
+        MenuButtonPos = pos,
+        MenuButtonOffset = offset,
+    });
 end;
 
 FiveSync.Lucide = {
@@ -1981,6 +2028,53 @@ function FiveSync.__CONFIG(config , default)
 	return config;
 end;
 
+-- Compares two element values so SetValue can skip its callback when nothing
+-- actually changed. A config load writes every flag straight from disk, so
+-- without this a feature whose saved value already matches still runs its
+-- toggle callback for the same state (re-installing hooks and rewriting
+-- properties it never owned).
+function FiveSync:__SameValue(a, b)
+	if typeof(a) ~= typeof(b) then return false end;
+
+	if typeof(a) == "Color3" then
+		local eps = 1 / 1024;
+		return math.abs(a.R - b.R) < eps
+			and math.abs(a.G - b.G) < eps
+			and math.abs(a.B - b.B) < eps;
+	end;
+
+	return a == b;
+end;
+
+-- True when a stored ColorPicker value matches the picker's live colour.
+function FiveSync:__SameColor(value, opc, current)
+	if typeof(value) ~= "Color3" or type(current) ~= "table" then return false end;
+
+	local c = current.ColorPicker;
+	if not c or not c.Color then return false end;
+
+	return FiveSync:__SameValue(value, c.Color) and (opc == nil or opc == c.Transparency);
+end;
+
+-- Dropdown values are a string (single select) or an array/map (multi
+-- select). A config restore rebuilds the table, so an identity check always
+-- reports a change; compare contents instead.
+function FiveSync:__SameTable(a, b)
+	if type(a) ~= "table" or type(b) ~= "table" then
+		return FiveSync:__SameValue(a, b);
+	end;
+
+	for k, v in next, a do
+		if b[k] ~= v then return false end;
+	end;
+
+	for k in next, b do
+		if a[k] == nil then return false end;
+	end;
+
+	return true;
+end;
+
 function FiveSync:Drag(InputFrame: Frame, MoveFrame: Frame, Speed : number)
 	local dragToggle: boolean = false;
 	local dragStart: Vector3 = nil;
@@ -3306,7 +3400,10 @@ function FiveSync:_AddColorPickerPanel(Button: ImageButton , Callback: (Color: C
 		Transparency = TransparencyValue;
 	end;
 
-	function Args:Update()
+	-- `Silent` skips the Callback. Programmatic refreshes (SetValue, config
+	-- restore) pass it, otherwise the panel fires the Callback a second time
+	-- on every SetValue and the change looks like a user edit.
+	function Args:Update(Silent)
 		local MainColor = Color3.fromHSV(H , S , 1);
 		local RealColor = Color3.fromHSV(H , S , V);
 
@@ -3332,7 +3429,9 @@ function FiveSync:_AddColorPickerPanel(Button: ImageButton , Callback: (Color: C
 
 		TextLabel.Text = "#" .. tostring(RealColor:ToHex())
 
-		Callback(RealColor , Transparency);
+		if not Silent then
+			Callback(RealColor , Transparency);
+		end;
 	end;
 
 	local SPAWN_THREAD;
@@ -4193,11 +4292,15 @@ function FiveSync:_LoadOption(Value , TabSignal)
 		Args.Flag = Config.Flag;
 
 		function Args:SetValue(value)
+			local changed = not FiveSync:__SameValue(value, Config.Default);
+
 			Config.Default = value;
 
 			Keybind.SetValue(Config.Default);
 
-			Config.Callback(Config.Default);
+			if changed then
+				Config.Callback(Config.Default);
+			end;
 		end;
 
 		function Args:GetValue()
@@ -4323,21 +4426,26 @@ function FiveSync:_LoadOption(Value , TabSignal)
 		end);
 
 		ColorPicker:SetColor(Config.Default,Config.Transparency);
-		ColorPicker:Update()
+		ColorPicker:Update(true)
 
 		local Args = {};
 
 		Args.Flag = Config.Flag;
 
 		function Args:SetValue(value,opc)
+			local changed = not FiveSync:__SameValue(value, Config.Default)
+				or (opc ~= nil and opc ~= Config.Transparency);
+
 			Config.Default = value;
 			Config.Transparency = opc;
 
 			ColorPicker:SetColor(value,opc)
 
-			ColorPicker:Update()
+			ColorPicker:Update(true)
 
-			Config.Callback(value,opc);
+			if changed then
+				Config.Callback(value,opc);
+			end;
 		end;
 
 		function Args:GetValue()
@@ -4378,11 +4486,15 @@ function FiveSync:_LoadOption(Value , TabSignal)
 		Args.Flag = Config.Flag
 
 		function Args:SetValue(value)
+			local changed = not FiveSync:__SameValue(value, Config.Default);
+
 			Config.Default = value;
 
 			Toggle.ChangeValue(Config.Default);
 
-			Config.Callback(Config.Default);
+			if changed then
+				Config.Callback(Config.Default);
+			end;
 		end;
 
 		function Args:GetValue()
@@ -4928,13 +5040,17 @@ local function AddToggleElement(Config, Parent, Signal, Zindex, EnabledLine, Dis
 	Args.Flag = Config.Flag;
 
 	function Args:SetValue(value)
+		local changed = not FiveSync:__SameValue(value, Config.Default);
+
 		Config.Default = value;
 
 		Toggle.ChangeValue(Config.Default);
 
 		Block:SetTransparency((Config.Default and 0.1) or 0.3);
 
-		Config.Callback(Config.Default);
+		if changed then
+			Config.Callback(Config.Default);
+		end;
 	end;
 
 	Args.Signal = Signal:Connect(function(bool)
@@ -5072,11 +5188,15 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 		end;
 
 		function Args:SetValue(value)
+			local changed = not FiveSync:__SameValue(value, Config.Default);
+
 			Config.Default = value;
 
 			Keybind.SetValue(Config.Default);
 
-			Config.Callback(Config.Default);
+			if changed then
+				Config.Callback(Config.Default);
+			end;
 		end;
 
 		Args.Signal = Signal:Connect(function(bool)
@@ -5130,20 +5250,25 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 		end);
 
 		ColorPicker:SetColor(Config.Default,Config.Transparency);
-		ColorPicker:Update()
+		ColorPicker:Update(true)
 
 		local Args = {};
 
 		Args.Flag = Config.Flag;
 
 		function Args:SetValue(value,opc)
+			local changed = not FiveSync:__SameValue(value, Config.Default)
+				or (opc ~= nil and opc ~= Config.Transparency);
+
 			Config.Default = value;
 			Config.Transparency = opc;
 
 			ColorPicker:SetColor(value,opc);
-			ColorPicker:Update();
+			ColorPicker:Update(true);
 
-			Config.Callback(value,opc);
+			if changed then
+				Config.Callback(value,opc);
+			end;
 		end;
 
 		function Args:SetText(str : string)
@@ -5571,6 +5696,8 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 		Args.Flag = Config.Flag;
 
 		function Args:SetValue(Value)
+			local changed = not FiveSync:__SameValue(Value, Config.Default);
+
 			Config.Default = Value;
 
 			ValueText.Text = tostring(Config.Default)..tostring(Config.Type)
@@ -5579,7 +5706,9 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 				Size = UDim2.new(math.max((Config.Default - Config.Min) / (Config.Max - Config.Min) , 0.045), 0, 1, 0)
 			});
 
-			Config.Callback(Value);
+			if changed then
+				Config.Callback(Value);
+			end;
 		end;
 
 		function Args:SetText(str : string)
@@ -6009,11 +6138,15 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 		end;
 
 		function Args:SetValue(Value)
+			local changed = not FiveSync:__SameValue(Value, Config.Default);
+
 			Config.Default = Value;
 
 			TextBox_2.Text = tostring(Config.Default);
 
-			Config.Callback(Value);
+			if changed then
+				Config.Callback(Value);
+			end;
 		end;
 
 		Args.Signal = Signal:Connect(function(bool)
@@ -6284,13 +6417,17 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 		Args.Flag = Config.Flag;
 
 		function Args:SetValue(Value)
+			local changed = not FiveSync:__SameTable(Value, Config.Default);
+
 			Config.Default = Value;
 
 			ValueText.Text = DaTabarser(Config.Default);
 
 			repi:SetData(Config.Default,Config.Values,Config.Multi,true);
 
-			Config.Callback(Value);
+			if changed then
+				Config.Callback(Value);
+			end;
 		end;
 
 		function Args:SetText(str : string)
@@ -9834,6 +9971,100 @@ function FiveSync.new(Config : Window)
 		ImageLabel.ImageTransparency = 1
 		ImageLabel.ClipsDescendants = false;
 
+		-- Presets for the floating menu button. Each anchor keeps the button
+		-- growing inwards, so the animated width never pushes it off screen.
+		local MenuButtonPresets = {
+			["Centro Topo"] = { Anchor = Vector2.new(0.5, 0), Pos = UDim2.new(0.5, 0, 0, 12) },
+			["Centro Baixo"] = { Anchor = Vector2.new(0.5, 1), Pos = UDim2.new(0.5, 0, 1, -12) },
+			["Canto Esquerdo"] = { Anchor = Vector2.new(0, 0), Pos = UDim2.new(0, 12, 0, 12) },
+			["Canto Direito"] = { Anchor = Vector2.new(1, 0), Pos = UDim2.new(1, -12, 0, 12) },
+		};
+
+		local MenuButtonDrag = nil;
+		
+		-- Free mode stores the offset so the button comes back where the user
+		-- left it on the next execute.
+		local function SaveMenuButtonOffset()
+			FiveSync:__WriteMenuButtonPos("Solto", {
+				X = CloseWindow.Position.X.Scale, XO = CloseWindow.Position.X.Offset,
+				Y = CloseWindow.Position.Y.Scale, YO = CloseWindow.Position.Y.Offset,
+				AX = CloseWindow.AnchorPoint.X, AY = CloseWindow.AnchorPoint.Y,
+			});
+		end;
+
+		local function StopMenuButtonDrag()
+			if MenuButtonDrag then
+				MenuButtonDrag:Disconnect();
+				MenuButtonDrag = nil;
+				SaveMenuButtonOffset();
+			end;
+		end;
+
+		local function EnableMenuButtonDrag()
+			if MenuButtonDrag then return end;
+
+			local startPos = CloseWindow.Position;
+			local startInput = nil;
+		
+			MenuButtonDrag = UserInputService.InputChanged:Connect(function(input)
+				if input.UserInputType ~= Enum.UserInputType.MouseMovement
+					and input.UserInputType ~= Enum.UserInputType.Touch then
+					return;
+				end;
+
+				if not startInput then startInput = input.Position; return end;
+		
+				local delta = input.Position - startInput;
+		
+				CloseWindow.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + delta.X,
+					startPos.Y.Scale, startPos.Y.Offset + delta.Y);
+			end);
+		end;
+
+		function WindowArgs:SetMenuButtonPos(pos, offset)
+			pos = pos or "Canto Direito";
+		
+			local preset = MenuButtonPresets[pos];
+		
+			StopMenuButtonDrag();
+		
+			if preset then
+				CloseWindow.AnchorPoint = preset.Anchor;
+				CloseWindow.Position = preset.Pos;
+			else
+				pos = "Solto";
+		
+				if offset then
+					CloseWindow.AnchorPoint = Vector2.new(offset.AX or 0, offset.AY or 0);
+					CloseWindow.Position = UDim2.new(
+						offset.X or 0, offset.XO or 0,
+						offset.Y or 0, offset.YO or 0);
+				else
+					CloseWindow.AnchorPoint = Vector2.new(1, 0);
+					CloseWindow.Position = UDim2.new(1, -12, 0, 12);
+				end;
+
+				EnableMenuButtonDrag();
+			end;
+
+		WindowArgs.MenuButtonPos = pos;
+		end;
+
+		do
+			local savedPos, savedOffset = FiveSync:__ReadMenuButtonPos();
+			WindowArgs:SetMenuButtonPos(savedPos, savedOffset);
+		end;
+
+		table.insert(WindowArgs.THREADS, task.spawn(function()
+			UserInputService.InputEnded:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1
+					or input.UserInputType == Enum.UserInputType.Touch then
+					StopMenuButtonDrag();
+				end;
+			end);
+		end));
+
 		local ToggleCloseUI = function(v)
 			ImageLabel.Image = Config.Logo;
 
@@ -10177,6 +10408,16 @@ function FiveSync.new(Config : Window)
 			Default = Config.Keybind,
 			Callback = function(v)
 				WindowArgs:SetMenuKey(v);
+			end,
+		});
+
+		Section:AddDropdown({
+			Flag = "Menu_ButtonPos",
+			Name = "Posição do Botão",
+			Default = (FiveSync:__ReadMenuButtonPos()) or "Canto Direito",
+			Values = FiveSync.MenuButtonPositions,
+			Callback = function(v)
+				WindowArgs:SetMenuButtonPos(v);
 			end,
 		});
 
