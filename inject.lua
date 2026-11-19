@@ -585,6 +585,16 @@ function FiveSync:__WriteMenuButtonPos(pos, offset)
         MenuButtonOffset = offset,
     });
 end;
+-- Lets the user hide the floating button entirely (useful on a phone where it
+-- would sit on top of the game controls). The menu keybind still opens the menu.
+function FiveSync:__ReadMenuButtonHidden()
+    local prefs = FiveSync:__ReadWindowPrefs();
+    return prefs.MenuButtonHidden == true;
+end;
+
+function FiveSync:__WriteMenuButtonHidden(hidden)
+    FiveSync:__WriteWindowPrefs({ MenuButtonHidden = hidden == true });
+end;
 
 FiveSync.Lucide = {
 	['lucide-mouse-2'] = "rbxassetid://10088146939",
@@ -10054,6 +10064,7 @@ function FiveSync.new(Config : Window)
 		do
 			local savedPos, savedOffset = FiveSync:__ReadMenuButtonPos();
 			WindowArgs:SetMenuButtonPos(savedPos, savedOffset);
+			WindowArgs.MenuButtonHidden = FiveSync:__ReadMenuButtonHidden();
 		end;
 
 		table.insert(WindowArgs.THREADS, task.spawn(function()
@@ -10067,6 +10078,22 @@ function FiveSync.new(Config : Window)
 
 		local ToggleCloseUI = function(v)
 			ImageLabel.Image = Config.Logo;
+
+			if WindowArgs.MenuButtonHidden then
+				FiveSync:_Animation(CloseWindow,TweenInfo.new(0.2),{
+					Size = UDim2.new(0, 0, 0, 34),
+					BackgroundTransparency = 1
+				})
+
+				FiveSync:_Animation(ImageLabel,TweenInfo.new(0.2),{
+					ImageTransparency = 1
+				})
+
+				CloseWindow.Visible = false;
+				return;
+			end;
+
+			CloseWindow.Visible = true;
 
 			if v then
 				ImageLabel.ClipsDescendants = true;
@@ -10091,6 +10118,14 @@ function FiveSync.new(Config : Window)
 					ImageTransparency = 1
 				})
 			end;
+		end;
+
+		-- Hiding the floating button persists independently of its position, so
+		-- a phone user can reclaim the screen area and still open via keybind.
+		function WindowArgs:SetMenuButtonHidden(hidden)
+			WindowArgs.MenuButtonHidden = hidden == true;
+			FiveSync:__WriteMenuButtonHidden(WindowArgs.MenuButtonHidden);
+			ToggleCloseUI(not WindowArgs.IsOpen);
 		end;
 
 		function WindowArgs:Watermark()
@@ -10418,6 +10453,15 @@ function FiveSync.new(Config : Window)
 			Values = FiveSync.MenuButtonPositions,
 			Callback = function(v)
 				WindowArgs:SetMenuButtonPos(v);
+			end,
+		});
+
+		Section:AddToggle({
+			Flag = "Menu_HideButton",
+			Name = "Ocultar Botão Flutuante",
+			Default = WindowArgs.MenuButtonHidden == true,
+			Callback = function(v)
+				WindowArgs:SetMenuButtonHidden(v);
 			end,
 		});
 

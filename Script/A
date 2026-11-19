@@ -15,9 +15,9 @@ if FiveSync:AutoOptimize({
     CloseButtonDelay = 0.5,
     ConfigRefreshDelay = 0.5,
 }) then
-    print("[E$34x] Mobile detectado - modo otimizado ativado.")
+    print("[Vsync] Mobile detectado - modo otimizado ativado.")
 else
-    print("[E$34x] Desktop detectado - modo normal.")
+    print("[Vsync] Desktop detectado - modo normal.")
 end
 -- Tema: preto e branco neon (branco bem brilhante sobre preto)
 FiveSync.Colors.Highlight       = Color3.fromRGB(255, 255, 255)
@@ -34,15 +34,15 @@ FiveSync.Colors.DropColor       = Color3.fromRGB(12, 12, 12)
 FiveSync.Colors.MouseEnter      = Color3.fromRGB(40, 40, 40)
 local Notifier = FiveSync.newNotify()
 local ConfigManager = FiveSync:ConfigManager({
-    Directory = "E$34x",
-    Config = "E$34x-Configs"
+    Directory = "Vsync",
+    Config = "Vsync-Configs"
 })
 -- Persist the menu key on its own so it survives a re-execute even without a
 -- saved config being loaded.
-FiveSync:SetMenuKeyPersist("E$34x/Window.json")
+FiveSync:SetMenuKeyPersist("Vsync/Window.json")
 FiveSync:Loader("rbxassetid://117056629401480", 2.5).yield()
 local Window = FiveSync.new({
-    Name = "E$34x",
+    Name = "Vsync",
     Keybind = "LeftAlt",
     Logo = "rbxassetid://117056629401480",
     Scale = UDim2.fromScale(0.5, 0.9),  -- 40% da largura, 70% da altura da tela
@@ -81,7 +81,7 @@ task.spawn(function()
         updateExpireText()
     end
 end)
-Window:DrawCategory({ Name = "E$34x Menu V1" })
+Window:DrawCategory({ Name = "Vsync Menu V1" })
 local WlcT = Window:DrawTab({
     Name = "| Bem-Vindo",
     Icon = "newspaper",
@@ -112,7 +112,7 @@ WlcS:AddParagraph({
     Content = [[
 - Sobre nosso script e comunidade:
 
-E$34x foi iniciado pela Team EntreViela$ apos a queda do antigo script 
+Vsync foi iniciado pela Team EntreViela$ apos a queda do antigo script 
 o Famoso 1v99 que ficou muito conhecido no cenario do Sintonia RP e Role play Brasil.
 Apos a queda Desânimo bateu parei por um bom tempo e voltei com essa comunidade.
 estamos aceitando novos scripters e ajudando iniciantes sem cobrar nada.
@@ -1296,6 +1296,178 @@ NoclipSection:AddDropdown({
 ]]--
 end
 
+--[[
+
+=== Desync Tab ===
+
+]]
+do -- escopo local (limite de 200 registradores)
+local DesyncTab = PlayerContainer:DrawTab({
+    Name = " Desync  ",
+    Type = "Double"
+})
+
+getgenv().Desync_Ativo      = false
+getgenv().Desync_Forca      = 5     -- studs de deslocamento aplicados no root
+getgenv().Desync_MostrarBox = false
+getgenv().Desync_BoxColor   = Color3.fromRGB(255, 60, 60)
+
+local DesyncConn, DesyncBox, DesyncCharConn = nil, nil, nil
+local desyncLoc = nil     -- posição "real" que o cliente enxerga
+local desyncServerCF = nil -- posição que o servidor recebe (desync aplicado)
+local desyncHooked = false
+local lastLook, isSpinning = nil, false
+
+local function Desync_GetRoot()
+    local char = localPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function Desync_EnsureBox()
+    if DesyncBox and DesyncBox.Parent then return DesyncBox end
+    local ok, part = pcall(function()
+        local p = Instance.new("Part")
+        p.Name = "Vsync_ServerHitbox"
+        p.Anchored = true
+        p.CanCollide = false
+        p.Material = Enum.Material.ForceField
+        p.Size = Vector3.new(4, 6, 2)
+        p.Transparency = 1
+        p.Parent = workspace
+        return p
+    end)
+    if ok then DesyncBox = part end
+    return DesyncBox
+end
+
+local function Desync_UpdateBox()
+    local box = DesyncBox
+    if not getgenv().Desync_MostrarBox or not desyncServerCF then
+        if box then box.Transparency = 1 end
+        return
+    end
+    box = Desync_EnsureBox()
+    if not box then return end
+    box.Color = getgenv().Desync_BoxColor
+    box.Transparency = 0.5
+    box.CFrame = desyncServerCF
+end
+
+-- O hook de __index faz scripts do próprio cliente lerem a posição real
+-- enquanto o servidor recebe a deslocada. Só instala uma vez; quando o desync
+-- está desligado a condição nunca fecha, então o hook fica inerte.
+local function Desync_InstallHook()
+    if desyncHooked then return end
+    local okHM, hm = pcall(function() return hookmetamethod end)
+    local okNC, nc = pcall(function() return newcclosure end)
+    if not okHM or type(hm) ~= "function" or not okNC or type(nc) ~= "function" then
+        return
+    end
+    local installed = pcall(function()
+        local orig
+        orig = hm(game, "__index", nc(function(self, key)
+            if getgenv().Desync_Ativo and not isSpinning and desyncLoc
+                and key == "CFrame" and not checkcaller() then
+                local char = localPlayer.Character
+                if char and self == char:FindFirstChild("HumanoidRootPart") then
+                    return desyncLoc
+                end
+            end
+            return orig(self, key)
+        end))
+    end)
+    desyncHooked = installed
+end
+
+local function Desync_Step()
+    if not getgenv().Desync_Ativo then return end
+    local root = Desync_GetRoot()
+    if not root then return end
+
+    -- Giro rápido + offset de CFrame vira um teleporte visível, que é
+    -- exatamente o padrão que detectores procuram. Pausa durante o giro.
+    local look = root.CFrame.LookVector
+    if lastLook then
+        local dot = math.clamp(lastLook:Dot(look), -1, 1)
+        isSpinning = math.deg(math.acos(dot)) > 15
+    end
+    lastLook = look
+    if isSpinning then return end
+
+    desyncLoc = root.CFrame
+    desyncServerCF = desyncLoc * CFrame.new(0, -getgenv().Desync_Forca, 0)
+    root.CFrame = desyncServerCF
+    RunService.RenderStepped:Wait()
+    root.CFrame = desyncLoc
+
+    Desync_UpdateBox()
+end
+
+local function Desync_SetActive(state)
+    getgenv().Desync_Ativo = state
+
+    if state then
+        Desync_InstallHook()
+        if not DesyncConn then
+            DesyncConn = RunService.Heartbeat:Connect(Desync_Step)
+        end
+        if not DesyncCharConn then
+            DesyncCharConn = localPlayer.CharacterAdded:Connect(function()
+                lastLook, isSpinning, desyncLoc, desyncServerCF = nil, false, nil, nil
+            end)
+        end
+    else
+        if DesyncConn then
+            DesyncConn:Disconnect()
+            DesyncConn = nil
+        end
+        if DesyncCharConn then
+            DesyncCharConn:Disconnect()
+            DesyncCharConn = nil
+        end
+        if DesyncBox then
+            DesyncBox:Destroy()
+            DesyncBox = nil
+        end
+        lastLook, isSpinning, desyncLoc, desyncServerCF = nil, false, nil, nil
+    end
+end
+
+local DesyncCfg = DesyncTab:DrawSection({ Name = "Configurações", Position = "left" })
+local DesyncVis = DesyncTab:DrawSection({ Name = "Visual", Position = "right" })
+
+DesyncCfg:AddToggle({
+    Flag = "Desync_Ativar", Name = "Ativar Desync", Default = false,
+    Callback = Desync_SetActive });
+
+DesyncCfg:AddSlider({
+    Flag = "Desync_Forca", Name = "Força (studs)", Min = 1, Max = 20, Default = 5, Round = 0,
+    Callback = function(v) getgenv().Desync_Forca = v end });
+
+DesyncVis:AddToggle({
+    Flag = "Desync_MostrarBox", Name = "Mostrar Hitbox do Servidor", Default = false,
+    Callback = function(v)
+        getgenv().Desync_MostrarBox = v
+        if v then
+            Desync_UpdateBox()
+        elseif DesyncBox then
+            DesyncBox.Transparency = 1
+        end
+    end });
+
+DesyncVis:AddColorPicker({
+    Flag = "Desync_BoxColor", Name = "Cor da Hitbox", Default = getgenv().Desync_BoxColor,
+    Callback = function(c)
+        getgenv().Desync_BoxColor = c
+        if DesyncBox then DesyncBox.Color = c end
+    end });
+
+DesyncCfg:AddParagraph({
+    Title = "Hitbox do servidor:",
+    Content = "A caixa mostra onde o servidor enxerga seu personagem enquanto o desync está ligado." })
+end
+
 local CombatContainer = Window:DrawContainerTab({
 	Name = "| Combat",
 	Icon = "crosshair",
@@ -1326,6 +1498,7 @@ getgenv().Aimbot_TeamCheck = false
 getgenv().Aimbot_IgnoreFriends = false
 getgenv().Aimbot_ItemCheck = false -- Se ligado, aimbot só funciona se VOCÊ segurar um item
 getgenv().Aimbot_Whitelist = {}
+getgenv().Aimbot_TargetNPCs = false -- Inclui NPCs/dummies como alvo do aimbot
 getgenv().Aimbot_FOVColor = Color3.fromRGB(255, 255, 255)
 getgenv().Aimbot_FOVRGB = false
 getgenv().Aimbot_FOVTransparency = 0.5
@@ -1410,6 +1583,31 @@ local function UpdateTracedLines(center, color, transparency)
     end
 end
 
+-- // NPCs (dummies)
+-- Um scan de workspace inteiro por frame e caro, entao o resultado fica em cache
+-- por 1s. Quem consome (Aimbot, Hitbox, Magnetic Aim) so chama isto quando a
+-- opcao de NPC correspondente esta ligada.
+local NPC_Cache = {}
+local NPC_LastScan = 0
+
+local function NPC_Scan(force)
+    local now = tick()
+    if not force and now - NPC_LastScan < 1 then return NPC_Cache end
+    NPC_LastScan = now
+
+    local list = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= LocalPlayer.Character then
+            local hum = v:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and not Players:GetPlayerFromCharacter(v) then
+                list[#list + 1] = v
+            end
+        end
+    end
+    NPC_Cache = list
+    return list
+end
+
 -- // Funções de Suporte
 local function IsVisible(targetPart)
     if not getgenv().Aimbot_WallCheck then return true end
@@ -1435,29 +1633,42 @@ local function GetClosestPlayer()
     local MaxDist = getgenv().Aimbot_FOV
     local Center = FiveSync:GetFOVCenter(getgenv().Aimbot_FOVFollowMouse and "Mouse" or "Screen")
 
+    -- Mesma pontuação (distância de tela até o centro do FOV) para jogadores e
+    -- NPCs, então quem estiver mais perto do cursor vence.
+    local function Consider(model)
+        local Hum = model:FindFirstChildOfClass("Humanoid")
+        if not Hum or Hum.Health <= 0 then return end
+
+        local targetPart = model:FindFirstChild(getgenv().Aimbot_TargetPart)
+        if not targetPart then return end
+        if not IsVisible(targetPart) then return end
+
+        local Pos, OnScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if OnScreen then
+            local Dist = (Vector2.new(Pos.X, Pos.Y) - Center).Magnitude
+            if Dist < MaxDist then
+                MaxDist = Dist
+                Target = targetPart
+            end
+        end
+    end
+
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
             if getgenv().Aimbot_Whitelist[p.Name] then continue end
             if getgenv().Aimbot_IgnoreFriends and LocalPlayer:IsFriendsWith(p.UserId) then continue end
             if getgenv().Aimbot_TeamCheck and p.Team == LocalPlayer.Team then continue end
-            
-            local Hum = p.Character:FindFirstChildOfClass("Humanoid")
-            if not Hum or Hum.Health <= 0 then continue end
-            
-            local targetPart = p.Character:FindFirstChild(getgenv().Aimbot_TargetPart)
-            if not targetPart then continue end
-            if not IsVisible(targetPart) then continue end
 
-            local Pos, OnScreen = Camera:WorldToViewportPoint(targetPart.Position)
-            if OnScreen then
-                local Dist = (Vector2.new(Pos.X, Pos.Y) - Center).Magnitude
-                if Dist < MaxDist then
-                    MaxDist = Dist
-                    Target = targetPart
-                end
-            end
+            Consider(p.Character)
         end
     end
+
+    if getgenv().Aimbot_TargetNPCs then
+        for _, model in ipairs(NPC_Scan()) do
+            Consider(model)
+        end
+    end
+
     return Target
 end
 
@@ -1592,6 +1803,8 @@ Section:AddToggle({
     Flag = "Section_ItemCheckVoc", Name = "Item Check (Você)", Default = false, Callback = function(v) getgenv().Aimbot_ItemCheck = v end });
 Section:AddToggle({
     Flag = "Section_IgnorarTime", Name = "Ignorar Time", Default = false, Callback = function(v) getgenv().Aimbot_TeamCheck = v end });
+Section:AddToggle({
+    Flag = "Section_AlvoNPC", Name = "Mirar em NPCs", Default = false, Callback = function(v) getgenv().Aimbot_TargetNPCs = v end });
 
 Visual:AddSlider({
     Flag = "Visual_TamanhoFOV", Name = "Tamanho FOV", Min = 10, Max = 600, Default = 150, Callback = function(v) getgenv().Aimbot_FOV = v end });
@@ -1679,7 +1892,7 @@ local function AddAimTargetToWhitelist()
     })
     return true
 end
-getgenv().E34x_AddAimTargetToWhitelist = AddAimTargetToWhitelist
+getgenv().Vsync_AddAimTargetToWhitelist = AddAimTargetToWhitelist
 
 -- O Callback do AddKeybind só roda quando o usuário reatribui a tecla, então o
 -- global precisa já existir para o listener abaixo funcionar de primeira.
@@ -1766,6 +1979,7 @@ getgenv().SilentAim_FOV        = 150
 -- como centro, em vez do meio da tela.
 getgenv().SilentAim_FOVFollowMouse = false
 getgenv().SilentAim_ShowFOV    = true
+getgenv().SilentAim_FOVTransparency = 0.15 -- 0 = opaco, 1 = invisível
 getgenv().SilentAim_ShowTarget = false
 getgenv().SilentAim_HitChance  = 100
 getgenv().SilentAim_Prediction = 0
@@ -1844,6 +2058,7 @@ local function SA_FOVRender()
             SA_FOVCircle.Position = FiveSync:GetFOVCenter(getgenv().SilentAim_FOVFollowMouse and "Mouse" or "Screen")
             SA_FOVCircle.Radius   = getgenv().SilentAim_FOV
             SA_FOVCircle.Color    = getgenv().Aimbot_FOVColor
+            SA_FOVCircle.Transparency = getgenv().SilentAim_FOVTransparency
         else
             SA_FOVCircle.Visible = false
         end
@@ -2249,6 +2464,9 @@ SAVisual:AddToggle({
     Flag = "SAVisual_MostrarFOV", Name = "Mostrar FOV", Default = true, Callback = function(v) getgenv().SilentAim_ShowFOV = v end });
 SAVisual:AddToggle({
     Flag = "SAVisual_SegueMouse", Name = "Seguir Mouse (FOV)", Default = false, Callback = function(v) getgenv().SilentAim_FOVFollowMouse = v end });
+SAVisual:AddSlider({
+    Flag = "SAVisual_FOVTransparency", Name = "Transparência do FOV", Min = 0, Max = 1, Default = 0.15, Round = 2,
+    Callback = function(v) getgenv().SilentAim_FOVTransparency = v end });
 SAVisual:AddToggle({
     Flag = "SAVisual_MostrarAlvo", Name = "Mostrar Alvo", Default = false, Callback = function(v) getgenv().SilentAim_ShowTarget = v end });
 SAVisual:AddDropdown({
@@ -2299,6 +2517,7 @@ local HitboxTab = CombatContainer:DrawTab({
 local hitboxSize = 10
 local hitboxTransparency = 0.9
 local hitboxEnabled = false
+local hitboxTargetNPCs = false
 local hitboxIncreaseButton, hitboxDecreaseButton
 local function isEnemy(player)
     if not player or not localPlayer then return false end
@@ -2426,6 +2645,20 @@ local function applyHitboxesToAllPlayers()
     end
 end
 
+local function applyHitboxesToAllNPCs()
+    for _, model in ipairs(NPC_Scan()) do
+        applyHitbox(model)
+    end
+end
+
+-- Cobre tudo que o modo atual alcanca: jogadores e, se ligado, NPCs.
+local function HitboxApplyAll()
+    applyHitboxesToAllPlayers()
+    if hitboxTargetNPCs then
+        applyHitboxesToAllNPCs()
+    end
+end
+
 local function resetHitboxesOnAllPlayers()
     for _, player in ipairs(Players:GetPlayers()) do
         if player.Character then
@@ -2434,11 +2667,23 @@ local function resetHitboxesOnAllPlayers()
     end
 end
 
+local function resetHitboxesOnAllNPCs()
+    for _, model in ipairs(NPC_Scan()) do
+        resetHitbox(model)
+    end
+end
+
+local function HitboxResetAll()
+    resetHitboxesOnAllPlayers()
+    resetHitboxesOnAllNPCs()
+end
+
 -- Aplicacao dirigida por evento: um personagem so precisa do hitbox quando
 -- entra na cena. O coroutine de 0.5s reaplicava em todos os jogadores para
 -- sempre, mesmo sem nada mudar.
 local hitboxPlayerConns = {}
 local hitboxGlobalConns = {}
+local hitboxNpcPoll = nil
 
 local function HitboxStopWatching()
     for _, conn in pairs(hitboxPlayerConns) do
@@ -2446,6 +2691,10 @@ local function HitboxStopWatching()
     end
     for _, conn in ipairs(hitboxGlobalConns) do
         pcall(function() conn:Disconnect() end)
+    end
+    if hitboxNpcPoll then
+        task.cancel(hitboxNpcPoll)
+        hitboxNpcPoll = nil
     end
     hitboxPlayerConns = {}
     hitboxGlobalConns = {}
@@ -2459,6 +2708,19 @@ local function HitboxWatchPlayer(player)
         task.defer(function()
             if hitboxEnabled then applyHitbox(char) end
         end)
+    end)
+end
+
+-- NPCs nao tem CharacterAdded: um poll lento cobre modelos que aparecem depois
+-- (e limpa os que morreram/sumiram). So roda quando o modo NPC esta ligado.
+local function HitboxStartNpcPoll()
+    if hitboxNpcPoll then return end
+    hitboxNpcPoll = task.spawn(function()
+        while hitboxEnabled and hitboxTargetNPCs do
+            applyHitboxesToAllNPCs()
+            task.wait(1)
+        end
+        hitboxNpcPoll = nil
     end)
 end
 
@@ -2481,6 +2743,10 @@ local function HitboxStartWatching()
             hitboxPlayerConns[player] = nil
         end
     end))
+
+    if hitboxTargetNPCs then
+        HitboxStartNpcPoll()
+    end
 end
 
 -- Hitbox toggle system
@@ -2488,11 +2754,11 @@ local function toggleHitboxes(enabled)
     hitboxEnabled = enabled
 
     if enabled then
-        applyHitboxesToAllPlayers()
+        HitboxApplyAll()
         HitboxStartWatching()
     else
         HitboxStopWatching()
-        resetHitboxesOnAllPlayers()
+        HitboxResetAll()
     end
 
     if hitboxIncreaseButton and hitboxDecreaseButton then
@@ -2535,6 +2801,28 @@ HitboxConfigSection:AddToggle({
     end
 })
 
+-- Alvo: incluir NPCs/dummies alem dos jogadores
+HitboxConfigSection:AddToggle({
+    Name = "Incluir NPCs",
+    Default = false,
+    Flag = "Combat_HitboxNPCs",
+    Callback = function(state)
+        hitboxTargetNPCs = state
+        if hitboxEnabled then
+            if state then
+                HitboxStartNpcPoll()
+                applyHitboxesToAllNPCs()
+            else
+                if hitboxNpcPoll then
+                    task.cancel(hitboxNpcPoll)
+                    hitboxNpcPoll = nil
+                end
+                resetHitboxesOnAllNPCs()
+            end
+        end
+    end
+})
+
 -- Slider para definir o tamanho
 HitboxConfigSection:AddSlider({
     Name = "Tamanho da Hitbox",
@@ -2546,7 +2834,7 @@ HitboxConfigSection:AddSlider({
     Callback = function(value)
         hitboxSize = math.floor(value)
         if hitboxEnabled then
-            applyHitboxesToAllPlayers()
+            HitboxApplyAll()
         end
     end
 })
@@ -2562,7 +2850,7 @@ HitboxVisualSection:AddSlider({
     Callback = function(value)
         hitboxTransparency = value
         if hitboxEnabled then
-            applyHitboxesToAllPlayers()
+            HitboxApplyAll()
         end
     end
 })
@@ -2571,7 +2859,7 @@ HitboxVisualSection:AddSlider({
 HitboxVisualSection:AddButton({
     Name = "Resetar Hitboxes",
     Callback = function()
-        resetHitboxesOnAllPlayers()
+        HitboxResetAll()
         Notifier.new({
             Title = "Hitbox",
             Content = "Hitboxes resetadas!",
@@ -2587,7 +2875,7 @@ hitboxIncreaseButton = HitboxButtonsSection:AddButton({
     Callback = function()
         hitboxSize = math.min(hitboxSize + 1, 30)
         if hitboxEnabled then
-            applyHitboxesToAllPlayers()
+            HitboxApplyAll()
         end
     end
 })
@@ -2597,7 +2885,7 @@ hitboxDecreaseButton = HitboxButtonsSection:AddButton({
     Callback = function()
         hitboxSize = math.max(hitboxSize - 1, 2)
         if hitboxEnabled then
-            applyHitboxesToAllPlayers()
+            HitboxApplyAll()
         end
     end
 })
@@ -2611,38 +2899,211 @@ hitboxDecreaseButton.Visible = false
 
 end
 do -- escopo local (limite de 200 registradores)
-CombatContainer:DrawTab({
-	Name = " Magnetic Aim  ",
-	Type = "Double"
+local MagTab = CombatContainer:DrawTab({
+   Name = " Magnetic Aim  ",
+   Type = "Double"
 });
 
+getgenv().Magnetic_Ativo       = false
+getgenv().Magnetic_FOV         = 150
+getgenv().Magnetic_WallCheck   = true
+getgenv().Magnetic_ShowFOV     = true
+getgenv().Magnetic_Smoothness  = 0.5
+getgenv().Magnetic_Mode        = "Suave"   -- "Suave" | "Blatant"
+getgenv().Magnetic_Distance    = 3         -- studs na frente da mira (Blatant)
+getgenv().Magnetic_TargetPart  = "Head"
+getgenv().Magnetic_TeamCheck   = false
+getgenv().Magnetic_TargetNPCs  = false
 
---[[
-    
-=== NPC COMBAT Tab ===
-    
-]]
+local MagConn, MagCircle = nil, nil
 
-local CombatNPCContainer = Window:DrawContainerTab({
-	Name = "| Combat NPC",
-	Icon = "crosshair",
-});
-CombatNPCContainer:DrawTab({
-	Name = " Npc Aimbot  ",
-	Type = "Single",
-	EnableScrolling = true,
-});
-CombatNPCContainer:DrawTab({
-	Name = " Npc Magnet  ",
-	Type = "Single",
-	EnableScrolling = true,
-});
+do
+    local ok, circle = pcall(function() return Drawing.new("Circle") end)
+    if ok and circle then
+        MagCircle = circle
+        MagCircle.Thickness = 1.5
+        MagCircle.Color = Color3.fromRGB(255, 255, 255)
+        MagCircle.Transparency = 0.8
+        MagCircle.NumSides = 64
+        MagCircle.Filled = false
+        MagCircle.Visible = false
+    end
+end
 
---[[
-    
-Visual Tab
-    
-]]
+local function Mag_LineOfSight(targetPos, char)
+    if not getgenv().Magnetic_WallCheck then return true end
+    local ok, res = pcall(function()
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { LocalPlayer.Character, char }
+        return workspace:Raycast(Camera.CFrame.Position, targetPos - Camera.CFrame.Position, params)
+    end)
+    if not ok then return true end
+    if not res then return true end
+    -- Encostar no proprio alvo nao conta como parede.
+    return (res.Position - targetPos).Magnitude < 3
+end
+
+local function Mag_Consider(model, center, best)
+    if model == LocalPlayer.Character then return best end
+
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return best end
+
+    local part = model:FindFirstChild(getgenv().Magnetic_TargetPart)
+        or model:FindFirstChild("Head")
+        or model:FindFirstChild("HumanoidRootPart")
+    if not part then return best end
+
+    local ok, pos, onScreen = pcall(function()
+        return Camera:WorldToViewportPoint(part.Position)
+    end)
+    if not ok or not onScreen or pos.Z <= 0 then return best end
+
+    local dist = (center - Vector2.new(pos.X, pos.Y)).Magnitude
+    if dist > getgenv().Magnetic_FOV then return best end
+    if best and dist >= best.dist then return best end
+    if not Mag_LineOfSight(part.Position, model) then return best end
+
+    return { model = model, part = part, dist = dist }
+end
+
+local function Mag_GetTarget()
+    local center = FiveSync:GetFOVCenter("Screen")
+    local best = nil
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            if not (getgenv().Magnetic_TeamCheck and plr.Team == LocalPlayer.Team) then
+                best = Mag_Consider(plr.Character, center, best)
+            end
+        end
+    end
+
+    if getgenv().Magnetic_TargetNPCs then
+        for _, model in ipairs(NPC_Scan()) do
+            best = Mag_Consider(model, center, best)
+        end
+    end
+
+    return best
+end
+
+local function Mag_Apply(target)
+    local char = target.model
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local camPos = Camera.CFrame.Position
+    local look = Camera.CFrame.LookVector
+    local goal, smooth
+
+    if getgenv().Magnetic_Mode == "Blatant" then
+        -- Puxa o alvo para bem na frente da mira, a uma distancia fixa.
+        goal = camPos + look * getgenv().Magnetic_Distance
+        smooth = 1
+    else
+        -- Mantem a distancia original: alinha lateralmente com a mira.
+        local head = char:FindFirstChild("Head")
+        local ref = head or hrp
+        local dist = (ref.Position - camPos).Magnitude
+        goal = camPos + look * dist
+        if head then
+            goal = goal + (hrp.Position - head.Position)
+        end
+        smooth = math.clamp(getgenv().Magnetic_Smoothness, 0.01, 1)
+    end
+
+    local goalCF = CFrame.new(goal)
+    pcall(function()
+        hrp.CFrame = hrp.CFrame:Lerp(goalCF, smooth)
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+    end)
+end
+
+local function Mag_Render()
+    if not getgenv().Magnetic_Ativo then
+        if MagCircle then MagCircle.Visible = false end
+        return
+    end
+
+    if MagCircle then
+        if getgenv().Magnetic_ShowFOV then
+            local center = FiveSync:GetFOVCenter("Screen")
+            MagCircle.Position = center
+            MagCircle.Radius = getgenv().Magnetic_FOV
+            MagCircle.Color = getgenv().Aimbot_FOVColor
+            MagCircle.Visible = true
+        else
+            MagCircle.Visible = false
+        end
+    end
+
+    local target = Mag_GetTarget()
+    if target then Mag_Apply(target) end
+end
+
+-- O loop so existe enquanto o modo esta ligado: nada de Heartbeat rodando a toa.
+local function Mag_SetActive(state)
+    getgenv().Magnetic_Ativo = state
+
+    if state then
+        if not MagConn then
+            MagConn = RunService.Heartbeat:Connect(Mag_Render)
+        end
+    else
+        if MagConn then
+            MagConn:Disconnect()
+            MagConn = nil
+        end
+        if MagCircle then MagCircle.Visible = false end
+    end
+end
+
+local MagCfg = MagTab:DrawSection({ Name = "Configurações", Position = "left" });
+local MagVis = MagTab:DrawSection({ Name = "Visual", Position = "right" });
+
+MagCfg:AddToggle({
+    Flag = "Magnetic_Ativar", Name = "Ativar Magnetic Aim", Default = false,
+    Callback = Mag_SetActive });
+
+MagCfg:AddDropdown({
+    Flag = "Magnetic_Modo", Name = "Modo", Default = "Suave", Values = {"Suave", "Blatant"},
+    Callback = function(v) getgenv().Magnetic_Mode = v end });
+
+MagCfg:AddSlider({
+    Flag = "Magnetic_Distancia", Name = "Distância (Blatant)", Min = 1, Max = 20, Default = 3, Round = 0,
+    Callback = function(v) getgenv().Magnetic_Distance = v end });
+
+MagCfg:AddSlider({
+    Flag = "Magnetic_Suavidade", Name = "Suavidade", Min = 0.05, Max = 1, Default = 0.5, Round = 2,
+    Callback = function(v) getgenv().Magnetic_Smoothness = v end });
+
+MagCfg:AddDropdown({
+    Flag = "Magnetic_Parte", Name = "Parte do Alvo", Default = "Head",
+    Values = {"Head", "UpperTorso", "LowerTorso", "HumanoidRootPart"},
+    Callback = function(v) getgenv().Magnetic_TargetPart = v end });
+
+MagCfg:AddToggle({
+    Flag = "Magnetic_NPCs", Name = "Incluir NPCs", Default = false,
+    Callback = function(v) getgenv().Magnetic_TargetNPCs = v end });
+
+MagCfg:AddToggle({
+    Flag = "Magnetic_Time", Name = "Ignorar Time", Default = false,
+    Callback = function(v) getgenv().Magnetic_TeamCheck = v end });
+
+MagCfg:AddToggle({
+    Flag = "Magnetic_Wallcheck", Name = "Wallcheck", Default = true,
+    Callback = function(v) getgenv().Magnetic_WallCheck = v end });
+
+MagVis:AddSlider({
+    Flag = "Magnetic_FOV", Name = "FOV", Min = 10, Max = 600, Default = 150, Round = 0,
+    Callback = function(v) getgenv().Magnetic_FOV = v end });
+
+MagVis:AddToggle({
+    Flag = "Magnetic_MostrarFOV", Name = "Mostrar FOV", Default = true,
+    Callback = function(v) getgenv().Magnetic_ShowFOV = v end });
 end
 
 local VisualContainer = Window:DrawContainerTab({
@@ -3917,7 +4378,7 @@ local function MB_Ensure()
     if not MB_Camera then return nil end
     if not MB_Effect or not MB_Effect.Parent then
         MB_Effect = Instance.new("BlurEffect", MB_Camera)
-        MB_Effect.Name = "E34x_MotionBlur"
+        MB_Effect.Name = "Vsync_MotionBlur"
     end
     return MB_Effect
 end
@@ -4025,7 +4486,7 @@ do
     local HttpService = game:GetService("HttpService")
     local QuickUIS = game:GetService("UserInputService")
     local QuickCoreGui = (gethui and gethui()) or game:GetService("CoreGui")
-    local LAYOUT_PATH = "E$34x/QuickButtons.json"
+    local LAYOUT_PATH = "Vsync/QuickButtons.json"
 
     local QuickState = {
         Size = 36,
@@ -4047,7 +4508,7 @@ do
         { Id = "ESP",        Flag = "SecMain_AtivarESP",        Label = "ESP" },
         { Id = "FullBright", Flag = "VisualSection_FullBright", Label = "LIGHT" },
         { Id = "AddWL",      Label = "ADD WL", DefaultVisible = true, Action = function()
-            if getgenv().E34x_AddAimTargetToWhitelist then getgenv().E34x_AddAimTargetToWhitelist() end
+            if getgenv().Vsync_AddAimTargetToWhitelist then getgenv().Vsync_AddAimTargetToWhitelist() end
         end },
     }
 
@@ -4071,7 +4532,7 @@ do
             }
         end
         pcall(function()
-            if not isfolder("E$34x") then makefolder("E$34x") end
+            if not isfolder("Vsync") then makefolder("Vsync") end
             writefile(LAYOUT_PATH, HttpService:JSONEncode(out))
         end)
     end
@@ -4099,7 +4560,7 @@ do
     local function EnsureRoot()
         if QuickButtons.Root and QuickButtons.Root.Parent then return QuickButtons.Root end
         local gui = Instance.new("ScreenGui")
-        gui.Name = "E$34x_QuickButtons"
+        gui.Name = "Vsync_QuickButtons"
         gui.ResetOnSpawn = false
         gui.IgnoreGuiInset = true
         gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
@@ -4368,7 +4829,7 @@ do
     end)
 
     -- Exposto para depuração/uso externo.
-    getgenv().E34x_QuickButtons = QuickButtons
+    getgenv().Vsync_QuickButtons = QuickButtons
 end
 
 
@@ -4572,7 +5033,7 @@ if table.find(configs, "default") then
 end
 
 Notifier.new({
-    Title = "Injected - E$34x",
+    Title = "Injected - Vsync",
     Content = "[ ! ] - Carregado com sucesso.",
     Duration = 10,
     Icon = "rbxassetid://117056629401480"
