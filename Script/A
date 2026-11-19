@@ -2667,6 +2667,9 @@ local Config = {
 }
 
 local ESP_Cache = {}
+-- Partes do personagem por jogador, para nao repetir FindFirstChild a cada
+-- frame. Invalidado quando `char` muda ou a parte sai da arvore.
+local ESP_PartsCache = {}
 local rainbowHue = 0
 local bodyConnections = {
     R15 = {
@@ -3221,8 +3224,23 @@ local function ESP_Render()
         seen[player] = true
 
         local char = player.Character
-        local hum = char and char:FindFirstChild("Humanoid")
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        -- FindFirstChild percorre os filhos; feito tres vezes por jogador por
+        -- frame. O cache abaixo guarda o resultado enquanto o personagem for o
+        -- mesmo e as partes continuarem na arvore (respawn troca `char`).
+        local parts = ESP_PartsCache[player]
+        local hum, hrp, head
+        if parts and parts.char == char then
+            hum, hrp, head = parts.hum, parts.hrp, parts.head
+            if hum and not hum.Parent then hum = nil end
+            if hrp and not hrp.Parent then hrp = nil end
+            if head and not head.Parent then head = nil end
+        end
+        if not (parts and parts.char == char and hum and hrp and head) then
+            hum = char and char:FindFirstChild("Humanoid")
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
+            head = char and char:FindFirstChild("Head")
+            ESP_PartsCache[player] = { char = char, hum = hum, hrp = hrp, head = head }
+        end
 
         -- Limpa e esquece quem saiu da cena (morte/saída), em vez de checar depois.
         if not char or not hum or not hrp or hum.Health <= 0 then
@@ -3238,7 +3256,6 @@ local function ESP_Render()
             continue
         end
 
-        local head = char:FindFirstChild("Head")
         if not head then
             local data = ESP_Cache[player]
             if data then HideData(data) end
@@ -3399,6 +3416,9 @@ local function ESP_Render()
     -- Jogadores que saíram do servidor: limpa o cache remanescente.
     for player in pairs(ESP_Cache) do
         if not seen[player] then ClearESP(player) end
+    end
+    for player in pairs(ESP_PartsCache) do
+        if not seen[player] then ESP_PartsCache[player] = nil end
     end
 end
 
