@@ -1396,10 +1396,21 @@ local function Desync_Step()
     if isSpinning then return end
 
     desyncLoc = root.CFrame
-    desyncServerCF = desyncLoc * CFrame.new(0, -getgenv().Desync_Forca, 0)
-    root.CFrame = desyncServerCF
-    RunService.RenderStepped:Wait()
+    -- Deslocamento horizontal (eixo X local = direita do personagem). Empurrar
+    -- no Y enterrava o root abaixo do chão: o servidor via o personagem cair no
+    -- void e o anticheat lia isso como teleporte, daí o kick. Na horizontal a
+    -- altura é preservada e a caixa acompanha o personagem.
+    desyncServerCF = desyncLoc * CFrame.new(getgenv().Desync_Forca, 0, 0)
+
+    -- Se o yield abaixo for interrompido (script desligado no meio do frame), o
+    -- root ficaria preso na posição deslocada. O pcall garante que o restore
+    -- sempre roda, senão o personagem fica fora do lugar até o respawn.
+    local ok = pcall(function()
+        root.CFrame = desyncServerCF
+        RunService.RenderStepped:Wait()
+    end)
     root.CFrame = desyncLoc
+    if not ok then return end
 
     Desync_UpdateBox()
 end
