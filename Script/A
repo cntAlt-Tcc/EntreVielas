@@ -1464,6 +1464,8 @@ end
 -- // Loop Principal (conectado apenas quando o Aimbot está ativo)
 local Hue = 0
 local Aimbot_Conn = nil
+local FOV_LastSize, FOV_LastStyle = -1, nil
+
 local function Aimbot_Render(dt)
     local active = getgenv().Aimbot_Ativo and getgenv().Aimbot_FOVStyle ~= "Nenhum"
     FOVFrame.Visible = active
@@ -1476,7 +1478,12 @@ local function Aimbot_Render(dt)
         FOVFrame.Position = UDim2.fromOffset(center.X, center.Y)
 
         local size = getgenv().Aimbot_FOV * 2
-        FOVFrame.Size = UDim2.new(0, size, 0, size)
+        -- Size e CornerRadius so mudam quando o usuario mexe na config; escrever
+        -- UDim2 novo por frame forca um novo layout a cada render.
+        if FOV_LastSize ~= size then
+            FOVFrame.Size = UDim2.new(0, size, 0, size)
+            FOV_LastSize = size
+        end
         
         if getgenv().Aimbv_FOVRGB then
             Hue = (Hue + dt * 0.2) % 1
@@ -1491,16 +1498,25 @@ local function Aimbot_Render(dt)
         end
         FOVStroke.Transparency = trans
 
-        if getgenv().Aimbot_FOVStyle == "Círculo" or getgenv().Aimbot_FOVStyle == "Animado" then
-            FOVCorner.CornerRadius = UDim.new(1, 0)
-            FOVStroke.Enabled = true
+        local style = getgenv().Aimbot_FOVStyle
+        if style ~= FOV_LastStyle then
+            if style == "Círculo" or style == "Animado" then
+                FOVCorner.CornerRadius = UDim.new(1, 0)
+                FOVStroke.Enabled = true
+            elseif style == "Quadrado" then
+                FOVCorner.CornerRadius = UDim.new(0, 0)
+                FOVStroke.Enabled = true
+            elseif style == "Traçado" then
+                FOVStroke.Enabled = false
+            end
+            FOV_LastStyle = style
+        end
+
+        if style == "Círculo" or style == "Animado" then
             ClearTracedLines()
-        elseif getgenv().Aimbot_FOVStyle == "Quadrado" then
-            FOVCorner.CornerRadius = UDim.new(0, 0)
-            FOVStroke.Enabled = true
+        elseif style == "Quadrado" then
             ClearTracedLines()
-        elseif getgenv().Aimbot_FOVStyle == "Traçado" then
-            FOVStroke.Enabled = false
+        elseif style == "Traçado" then
             if #fovDrawingLines == 0 then
                 fovDrawingLines = CreateTracedLines(getgenv().Aimbot_FOV, center, FOVStroke.Color, trans, FOVStroke.Thickness)
             else
@@ -3906,19 +3922,30 @@ local function MB_Ensure()
     return MB_Effect
 end
 
+local MB_LastSize = -1
 local function MB_Update()
     if not MB_Enabled or not MB_Camera or not MB_Last then return end
     local blur = MB_Ensure()
     if not blur then return end
-    local magnitude = (MB_Camera.CFrame.LookVector - MB_Last).Magnitude
-    blur.Size = math.clamp(math.abs(magnitude) * MB_Amount * MB_Amplifier / 2, 0, 56)
-    MB_Last = MB_Camera.CFrame.LookVector
+    local look = MB_Camera.CFrame.LookVector
+    local magnitude = (look - MB_Last).Magnitude
+    -- Escrever Size reavalia o shader de blur. Com a camera parada o valor e
+    -- sempre o mesmo, entao so escreve quando muda de fato.
+    local size = math.clamp(math.abs(magnitude) * MB_Amount * MB_Amplifier / 2, 0, 56)
+    if size ~= MB_LastSize then
+        blur.Size = size
+        MB_LastSize = size
+    end
+    MB_Last = look
 end
 
 local function MB_SetState(state)
     MB_Enabled = state
     if state then
         if MB_Camera then MB_Last = MB_Camera.CFrame.LookVector end
+        -- O efeito pode ter sido destruido no desligamento; o novo nasce no
+        -- tamanho padrao, entao o cache precisa ser esquecido.
+        MB_LastSize = -1
         MB_Ensure()
         if not MB_Connection then
             MB_Connection = RunService.Heartbeat:Connect(MB_Update)
