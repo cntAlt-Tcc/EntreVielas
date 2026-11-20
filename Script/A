@@ -3916,26 +3916,39 @@ local Config = {
     DynamicScaling = true,
     RefreshRate = 0, -- 0 para máximo FPS
     
+    -- RGB e Team Color moram em cada elemento (`RGB` / `Team`), não mais em
+    -- tabelas globais: cada seção do ESP liga o efeito só no que desenha.
+    -- `Glow` é o brilho neon daquele elemento; a intensidade só é lida quando
+    -- o brilho está ligado.
     Box = { Enabled = false, Type = "Full", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1, Outline = true,
             Fill = false, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.6,
             Gradient = false, GradientColor = Color3.fromRGB(0, 0, 255), GradientTransparency = 0.0,
-            CornerScale = 0.25 },
-    Tracer = { Enabled = false, Origin = "Bottom", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1 },
-    Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1 },
+            CornerScale = 0.25, RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+    Tracer = { Enabled = false, Origin = "Bottom", Color = Color3.fromRGB(255, 0, 0), Thickness = 1, Transparency = 1,
+               RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+    Life = { Enabled = false, Type = "Bar", Color = Color3.fromRGB(0, 255, 0), Transparency = 1,
+             Glow = false, GlowIntensity = 1 },
     Info = { Name = false, Distance = false, Item = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1,
              TextOutline = true, Shadow = false, Background = false, BackgroundColor = Color3.fromRGB(0, 0, 0),
-             BackgroundTransparency = 0.4 },
-    Skeleton = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1 },
-    Arrow = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1, Gap = 8 },
-    Circle = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Filled = false },
-    FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela" },
-    Rainbow = { Enabled = false, Speed = 0.05, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true, ApplyToSkeleton = true, ApplyToFOVLine = true },
+             BackgroundTransparency = 0.4, RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+    Skeleton = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1,
+                 RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+    Arrow = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1, Gap = 8,
+              RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+    Circle = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Filled = false,
+               RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+    FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela",
+                RGB = true, Glow = false, GlowIntensity = 1 },
+    -- Chams: Highlight no personagem (preenchimento + contorno). `DepthMode`
+    -- "Always" desenha por cima das paredes; "Occluded" respeita a geometria.
+    Chams = { Enabled = false, Fill = true, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.5,
+              Outline = true, OutlineColor = Color3.fromRGB(255, 255, 255), OutlineTransparency = 0,
+              DepthMode = "Always", RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+    Rainbow = { Enabled = false, Speed = 0.05 },
     -- Team Color: cada elemento usa a cor do time do jogador em vez da cor fixa.
     -- TeamRGB anima dentro da faixa daquele matiz (verde -> vários tons de
     -- verde), em vez do arco-íris completo.
-    TeamColor = { Enabled = false, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true,
-                  ApplyToSkeleton = true, ApplyToCircle = true, ApplyToArrow = true,
-                  TeamRGB = false }
+    TeamColor = { Enabled = false, TeamRGB = false }
 }
 
 local ESP_Cache = {}
@@ -4019,6 +4032,135 @@ end
 local function SetIf(obj, key, value)
     if obj[key] ~= value then obj[key] = value end
 end
+-- ===== Brilho neon =====
+-- Não existe shader no Drawing: o brilho é o próprio traço redesenhado em
+-- camadas mais grossas e mais transparentes. As camadas nascem só quando o
+-- brilho daquele elemento está ligado e são apenas escondidas quando desliga
+-- (recriar a cada toggle custaria alocação por frame).
+local GLOW_MAX_LAYERS = 2
+
+-- Quantas camadas a intensidade pede. 0 desliga; abaixo de 2 usa uma camada.
+local function GlowLayers(intensity)
+    if not intensity or intensity <= 0 then return 0 end
+    return intensity >= 2 and GLOW_MAX_LAYERS or 1
+end
+
+-- Cor do halo: a cor do elemento puxada para o branco, que é o que lê como
+-- neon. Cinza puro não tem matiz, então nesse caso o halo é branco mesmo.
+local function GlowColor(c)
+    local h, sat, v = Color3.toHSV(c)
+    return Color3.fromHSV(h, math.max(0, sat - 0.55), math.min(1, v * 1.15))
+end
+
+-- Buffer dos segmentos do frame. Montar uma lista nova por jogador por frame
+-- alocaria demais; o DrawGlow consome na hora, então um buffer basta.
+local GlowSegs = {}
+
+-- Coleta os segmentos visíveis das listas de Drawing passadas. Ignora as que
+-- estão escondidas, então o brilho acompanha exatamente o que foi desenhado.
+local function CollectGlowSegs(...)
+    local n = 0
+    for a = 1, select("#", ...) do
+        local list = select(a, ...)
+        for _, l in pairs(list) do
+            if l.Visible then
+                n = n + 1
+                local seg = GlowSegs[n]
+                if seg then
+                    seg[1], seg[2] = l.From, l.To
+                else
+                    GlowSegs[n] = { l.From, l.To }
+                end
+            end
+        end
+    end
+    return n
+end
+
+-- Desenha as camadas de brilho de `count` segmentos em `segments`.
+-- `store` é a lista de camadas daquele elemento; sobras de uma intensidade
+-- maior anterior ficam escondidas em vez de removidas.
+local function DrawGlow(store, segments, count, color, thickness, transparency, intensity)
+    local layers, n = GlowLayers(intensity), count
+    if layers == 0 or n == 0 then
+        for i = 1, #store do
+            local l = store[i]
+            if l.Visible then l.Visible = false end
+        end
+        return
+    end
+    local halo = GlowColor(color)
+    local used = 0
+    for layer = 1, layers do
+        local extra = layer * (1.5 + intensity)
+        local tr = math.min(1, transparency + layer * 0.18)
+        for j = 1, n do
+            used = used + 1
+            local l = store[used]
+            if not l then
+                l = CreateDrawing("Line", { Visible = false, Transparency = 1 })
+                store[used] = l
+            end
+            l.From, l.To = segments[j][1], segments[j][2]
+            SetIf(l, "Color", halo)
+            SetIf(l, "Thickness", thickness + extra)
+            SetIf(l, "Transparency", tr)
+            l.Visible = true
+        end
+    end
+    for i = used + 1, #store do
+        local l = store[i]
+        if l.Visible then l.Visible = false end
+    end
+end
+
+-- Brilho de texto: quatro cópias deslocadas em volta da principal. Cria as
+-- cópias só quando o brilho está ligado; guardadas por texto em TextGlow.
+local TextGlow = {}
+local GLOW_DIRS = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
+local function DrawTextGlow(t, color, size, transparency, intensity)
+    local list = TextGlow[t]
+    local layers = t.Visible and GlowLayers(intensity) or 0
+    if layers == 0 then
+        if list then
+            for i = 1, #list do
+                local g = list[i]
+                if g.Visible then g.Visible = false end
+            end
+        end
+        return
+    end
+    if not list then
+        list = {}
+        TextGlow[t] = list
+    end
+    local halo = GlowColor(color)
+    local off = 1 + intensity
+    for i = 1, 4 do
+        local g = list[i]
+        if not g then
+            g = CreateDrawing("Text", { Center = true, Outline = false, Visible = false })
+            list[i] = g
+        end
+        g.Text = t.Text
+        g.Position = t.Position + Vector2.new(GLOW_DIRS[i][1] * off, GLOW_DIRS[i][2] * off)
+        SetIf(g, "Color", halo)
+        SetIf(g, "Size", size)
+        SetIf(g, "Transparency", math.min(1, transparency + 0.25))
+        g.Visible = true
+    end
+end
+
+-- Esconde (sem remover) o brilho de um texto.
+local function HideTextGlow(t)
+    local list = TextGlow[t]
+    if not list then return end
+    for i = 1, #list do
+        local g = list[i]
+        if g.Visible then g.Visible = false end
+    end
+end
+
 -- Cor escura derivada da cor do texto, usada como sombra para dar contraste.
 local function ShadowColor(c)
     local h, s, v = Color3.toHSV(c)
@@ -4063,6 +4205,12 @@ local function StyleText(t, color, size, transparency)
     elseif sh then
         sh.Visible = false
     end
+
+    if Config.Info.Glow then
+        DrawTextGlow(t, color, size, transparency, Config.Info.GlowIntensity)
+    else
+        HideTextGlow(t)
+    end
 end
 
 -- Desenha o fundo do texto (caixa colorida atrás) quando ligado, ou o esconde.
@@ -4090,6 +4238,47 @@ local function HideText(t)
     if sh and sh.Visible then sh.Visible = false end
     local bg = TextBackgrounds[t]
     if bg and bg.Visible then bg.Visible = false end
+    HideTextGlow(t)
+end
+
+-- ===== Chams (Highlight) =====
+-- O chams não é Drawing: é um `Highlight` preso ao personagem, que preenche e
+-- contorna o modelo inteiro. Fica num Folder próprio em CoreGui para o
+-- ClearESP achar e destruir tudo de uma vez.
+local ChamsFolder = nil
+local function ChamsParent()
+    if ChamsFolder and ChamsFolder.Parent then return ChamsFolder end
+    local holder = (gethui and gethui()) or game:GetService("CoreGui")
+    ChamsFolder = Instance.new("Folder")
+    ChamsFolder.Name = "EntreVielas_Chams"
+    ChamsFolder.Parent = holder
+    return ChamsFolder
+end
+
+-- Cor do neon: a cor pedida puxada para o branco. Só é aplicada quando o
+-- brilho do chams está ligado.
+local function ChamsNeon(c, intensity)
+    if not intensity or intensity <= 0 then return c end
+    local h, sat, v = Color3.toHSV(c)
+    return Color3.fromHSV(h, math.max(0, sat - 0.35 * math.min(intensity, 3)), math.min(1, v * 1.1))
+end
+
+-- Cria o Highlight do jogador na primeira vez que o chams liga.
+local function ChamsGet(data)
+    local h = data.Chams
+    if h and h.Parent then return h end
+    h = Instance.new("Highlight")
+    h.Name = "EV_Chams"
+    h.Parent = ChamsParent()
+    data.Chams = h
+    return h
+end
+
+local function ChamsDestroy(data)
+    local h = data.Chams
+    if not h then return end
+    pcall(function() h.Enabled = false; h:Destroy() end)
+    data.Chams = nil
 end
 
 -- Esconde uma lista de Drawings sem reescrever Visible quando já está escondido
@@ -4101,6 +4290,11 @@ local function HideList(list)
 end
 
 local function RemoveTextShadow(t)
+    local glowList = TextGlow[t]
+    if glowList then
+        for _, g in pairs(glowList) do g.Visible = false; g:Remove() end
+        TextGlow[t] = nil
+    end
     local sh = TextShadows[t]
     if sh then sh.Visible = false; sh:Remove(); TextShadows[t] = nil end
     local bg = TextBackgrounds[t]
@@ -4144,6 +4338,11 @@ local function ClearESP(player)
             if data.Skeleton then
                 for _, line in pairs(data.Skeleton) do line.Visible = false; line:Remove() end
             end
+            -- Remove Chams (Highlight) e as camadas de brilho
+            ChamsDestroy(data)
+            for _, store in pairs(data.Glow or {}) do
+                for _, l in pairs(store) do l.Visible = false; l:Remove() end
+            end
             -- Remove Seta e Círculo
             if data.Arrow then data.Arrow.Visible = false; data.Arrow:Remove() end
             if data.Circle3D then for _, l in pairs(data.Circle3D) do l.Visible = false; l:Remove() end end
@@ -4158,7 +4357,15 @@ local function InitPlayerESP(player)
     
     local data = {
         Box = {},
-        Skeleton = {}
+        Skeleton = {},
+        -- Camadas de brilho por elemento. Vazias: as linhas nascem só quando
+        -- o brilho daquele elemento é ligado.
+        Glow = { Box = {}, Box3D = {}, Tracer = {}, Skeleton = {}, Circle = {}, Arrow = {}, Life = {} },
+        -- Segmentos do contorno da seta (o brilho dela não é uma lista de
+        -- Drawings como os outros, então precisa de buffer próprio).
+        ArrowSegs = { {}, {}, {} },
+        -- Contorno do retângulo da barra de vida, para o brilho dela.
+        LifeSegs = { {}, {}, {}, {} },
     }
     
     -- Criar 8 linhas para suportar tanto Full quanto Corner
@@ -4195,6 +4402,9 @@ local ESP_RenderConn = nil
 -- // FOV Line: linha do centro da tela até o alvo atual do Silent Aim / Aimbot
 local FOVLineDraw = CreateDrawing("Line", {Thickness = 1, Transparency = 1, Visible = false})
 local FOVLineFrom = nil
+-- Brilho da FOV Line: camadas + o segmento único, em buffers fixos.
+local FOVGlow = {}
+local FOVSegs = { {} }
 local function GetFOVLineOrigin()
     local o = Config.FOVLine.Origin
     if o == "Mouse" then return UserInputService:GetMouseLocation() end
@@ -4232,6 +4442,7 @@ local function ESP_RenderFOVLine(rainbowColor)
     if not Config.FOVLine.Enabled then
         FOVLineDraw.Visible = false
         FOVLineFrom = nil
+        HideList(FOVGlow)
         return
     end
 
@@ -4252,18 +4463,24 @@ local function ESP_RenderFOVLine(rainbowColor)
     else
         FOVLineFrom = nil
     end
-    if not FOVLineFrom then FOVLineDraw.Visible = false; return end
+    if not FOVLineFrom then FOVLineDraw.Visible = false; HideList(FOVGlow); return end
 
     local pos, onScreen = Camera:WorldToViewportPoint(FOVLineFrom)
-    if not onScreen or pos.Z <= 0 then FOVLineDraw.Visible = false; return end
+    if not onScreen or pos.Z <= 0 then FOVLineDraw.Visible = false; HideList(FOVGlow); return end
 
     local origin = GetFOVLineOrigin()
     FOVLineDraw.From = origin
     FOVLineDraw.To = Vector2.new(pos.X, pos.Y)
-    SetIf(FOVLineDraw, "Color", (Config.Rainbow.Enabled and Config.Rainbow.ApplyToFOVLine) and rainbowColor or Config.FOVLine.Color)
+    SetIf(FOVLineDraw, "Color", (Config.Rainbow.Enabled and Config.FOVLine.RGB) and rainbowColor or Config.FOVLine.Color)
     SetIf(FOVLineDraw, "Thickness", Config.FOVLine.Thickness)
     SetIf(FOVLineDraw, "Transparency", Config.FOVLine.Transparency)
     FOVLineDraw.Visible = true
+    if Config.FOVLine.Glow then
+        FOVSegs[1][1], FOVSegs[1][2] = FOVLineDraw.From, FOVLineDraw.To
+        DrawGlow(FOVGlow, FOVSegs, 1, FOVLineDraw.Color, Config.FOVLine.Thickness, Config.FOVLine.Transparency, Config.FOVLine.GlowIntensity)
+    else
+        HideList(FOVGlow)
+    end
 end
 
 -- Desenha a caixa do ESP no modo pedido. "3D" projeta as 8 arestas do
@@ -4277,7 +4494,7 @@ local function DrawRectFill(data, x, y, width, height, fillColor, rainbowColor)
         return
     end
     if Config.Box.Gradient then
-        local gColor = (Config.Rainbow.Enabled and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.GradientColor
+        local gColor = (Config.Rainbow.Enabled and Config.Box.RGB) and rainbowColor or Config.Box.GradientColor
         local steps = 24
         local stepH = height / steps
         local gTop = Config.Box.GradientTransparency
@@ -4464,11 +4681,17 @@ local function HideData(data)
     if data.Arrow.Visible then data.Arrow.Visible = false end
     HideList(data.Circle3D)
     HideList(data.Circle3DFill)
+    if data.Chams and data.Chams.Enabled then data.Chams.Enabled = false end
+    for _, store in pairs(data.Glow or {}) do HideList(store) end
 end
 
 local function ESP_HideAll()
     for _, data in pairs(ESP_Cache) do
         pcall(HideData, data)
+        -- HideData só desativa o Highlight (o caminho de "pular jogador" roda a
+        -- cada frame e não pode recriar o objeto); com o ESP desligado ele sai
+        -- de vez, para não sobrar objeto nosso no CoreGui.
+        pcall(ChamsDestroy, data)
     end
 end
 
@@ -4495,19 +4718,21 @@ local function ESP_Render()
         FOVLineFrom = nil
     end
 
-    -- Cores base computadas uma vez por frame (não por jogador).
+    -- Cores base computadas uma vez por frame (não por jogador). Cada elemento
+    -- consulta o próprio `RGB`; o master `Config.Rainbow.Enabled` só liga o
+    -- relógio do arco-íris.
     local rb = Config.Rainbow.Enabled
     local tc = Config.TeamColor
     local teamMode = tc.Enabled
-    local boxColor = (rb and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.Color
-    local fillColor = (rb and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.FillColor
-    local textColor = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Info.Color
-    local skelColor = (rb and Config.Rainbow.ApplyToSkeleton) and rainbowColor or Config.Skeleton.Color
-    local tracerColor = (rb and Config.Rainbow.ApplyToTracer) and rainbowColor or Config.Tracer.Color
-    local circleColor = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Circle.Color
+    local boxColor = (rb and Config.Box.RGB) and rainbowColor or Config.Box.Color
+    local fillColor = (rb and Config.Box.RGB) and rainbowColor or Config.Box.FillColor
+    local textColor = (rb and Config.Info.RGB) and rainbowColor or Config.Info.Color
+    local skelColor = (rb and Config.Skeleton.RGB) and rainbowColor or Config.Skeleton.Color
+    local tracerColor = (rb and Config.Tracer.RGB) and rainbowColor or Config.Tracer.Color
+    local circleColor = (rb and Config.Circle.RGB) and rainbowColor or Config.Circle.Color
 
-    if teamMode then
-        if tc.TeamRGB then teamHue = (teamHue + Config.Rainbow.Speed) % 1 end
+    if teamMode and tc.TeamRGB then
+        teamHue = (teamHue + Config.Rainbow.Speed) % 1
     end
 
     local camPos = Camera.CFrame.Position
@@ -4583,9 +4808,11 @@ local function ESP_Render()
         -- os dois estão ligados, a cor do time é a base e o RGB só varia os
         -- tons dentro dela. Sem time (FFA), cai na cor fixa/RGB de sempre.
         local pBox, pFill, pText, pSkel, pTracer, pCircle = boxColor, fillColor, textColor, skelColor, tracerColor, circleColor
-        local pArrow = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Arrow.Color
+        local pArrow = (rb and Config.Arrow.RGB) and rainbowColor or Config.Arrow.Color
+        local teamBase
         if teamMode then
             local base = ESP_TeamColor(player)
+            teamBase = base
             if base then
                 local b, f
                 if tc.TeamRGB then
@@ -4594,12 +4821,12 @@ local function ESP_Render()
                 else
                     b, f = base, base
                 end
-                if tc.ApplyToBox then pBox, pFill = b, f end
-                if tc.ApplyToTracer then pTracer = b end
-                if tc.ApplyToText then pText = b end
-                if tc.ApplyToSkeleton then pSkel = b end
-                if tc.ApplyToCircle then pCircle = b end
-                if tc.ApplyToArrow then pArrow = b end
+                if Config.Box.Team then pBox, pFill = b, f end
+                if Config.Tracer.Team then pTracer = b end
+                if Config.Info.Team then pText = b end
+                if Config.Skeleton.Team then pSkel = b end
+                if Config.Circle.Team then pCircle = b end
+                if Config.Arrow.Team then pArrow = b end
             end
         end
 
@@ -4608,14 +4835,59 @@ local function ESP_Render()
         local width = height / 2
         local x, y = headPos.X - width / 2, headPos.Y
 
+        -- Chams: Highlight no modelo inteiro. Só existe enquanto ligado; ao
+        -- desligar é destruído em vez de ficar escondido, porque um Highlight
+        -- parado no CoreGui ainda é um objeto do jogo.
+        if Config.Chams.Enabled then
+            local h = ChamsGet(data)
+            h.Adornee = char
+            h.Enabled = true
+            h.FillTransparency = Config.Chams.Fill and Config.Chams.FillTransparency or 1
+            h.OutlineTransparency = Config.Chams.Outline and Config.Chams.OutlineTransparency or 1
+            local fillC = (rb and Config.Chams.RGB) and rainbowColor or Config.Chams.FillColor
+            local lineC = (rb and Config.Chams.RGB) and rainbowColor or Config.Chams.OutlineColor
+            -- Team Color por último: a cor do time substitui a fixa, como nos
+            -- outros elementos (o RGB já foi aplicado acima).
+            if Config.Chams.Team and teamBase then
+                fillC = (tc.TeamRGB and ESP_TeamTint(teamBase, teamHue)) or teamBase
+                lineC = fillC
+            end
+            if Config.Chams.Glow then
+                local gi = Config.Chams.GlowIntensity
+                fillC = ChamsNeon(fillC, gi)
+                lineC = ChamsNeon(lineC, gi)
+            end
+            SetIf(h, "FillColor", fillC)
+            SetIf(h, "OutlineColor", lineC)
+            SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode])
+        elseif data.Chams then
+            ChamsDestroy(data)
+        end
+
         if Config.Box.Enabled then
             DrawESPBox(data, Config.Box.Type, char, x, y, width, height, pBox, pFill, rainbowColor)
+            -- Brilho: contorna o que foi realmente desenhado (2D ou 3D).
+            if Config.Box.Glow then
+                local is3D = Config.Box.Type == "3D"
+                local src = is3D and data.Box3D or data.Box
+                local store = is3D and data.Glow.Box3D or data.Glow.Box
+                -- O modo inativo precisa ser escondido: trocar de Full para 3D
+                -- deixaria o halo do modo anterior desenhado.
+                HideList(is3D and data.Glow.Box or data.Glow.Box3D)
+                local n = CollectGlowSegs(src)
+                DrawGlow(store, GlowSegs, n, pBox, Config.Box.Thickness, Config.Box.Transparency, Config.Box.GlowIntensity)
+            else
+                HideList(data.Glow.Box)
+                HideList(data.Glow.Box3D)
+            end
         else
             for j = 1, 8 do local l = data.Box["Line"..j]; if l.Visible then l.Visible = false end end
             if data.BoxFill.Visible then data.BoxFill.Visible = false end
             HideList(data.BoxGradient)
             HideList(data.Box3D)
             HideList(data.Box3DFill)
+            HideList(data.Glow.Box)
+            HideList(data.Glow.Box3D)
         end
 
         if Config.Arrow.Enabled then
@@ -4628,13 +4900,36 @@ local function ESP_Render()
             SetIf(data.Arrow, "Transparency", Config.Arrow.Transparency)
             data.Arrow.Filled = true
             data.Arrow.Visible = true
-        elseif data.Arrow.Visible then data.Arrow.Visible = false end
+            -- Triângulo vira 3 segmentos para o brilho seguir o contorno.
+            if Config.Arrow.Glow then
+                local segs = data.ArrowSegs
+                local a = tip
+                local b = Vector2.new(headPos.X - asz / 2, tip.Y - asz)
+                local c = Vector2.new(headPos.X + asz / 2, tip.Y - asz)
+                segs[1][1], segs[1][2] = a, b
+                segs[2][1], segs[2][2] = b, c
+                segs[3][1], segs[3][2] = c, a
+                DrawGlow(data.Glow.Arrow, segs, 3, pArrow, 1, Config.Arrow.Transparency, Config.Arrow.GlowIntensity)
+            else
+                HideList(data.Glow.Arrow)
+            end
+        else
+            if data.Arrow.Visible then data.Arrow.Visible = false end
+            HideList(data.Glow.Arrow)
+        end
 
         if Config.Circle.Enabled then
             DrawCircle3D(data, char, pCircle)
+            if Config.Circle.Glow then
+                local n = CollectGlowSegs(data.Circle3D)
+                DrawGlow(data.Glow.Circle, GlowSegs, n, pCircle, Config.Circle.Thickness, Config.Circle.Transparency, Config.Circle.GlowIntensity)
+            else
+                HideList(data.Glow.Circle)
+            end
         else
             HideList(data.Circle3D)
             HideList(data.Circle3DFill)
+            HideList(data.Glow.Circle)
         end
 
         if Config.Tracer.Enabled then
@@ -4644,7 +4939,16 @@ local function ESP_Render()
             SetIf(data.Tracer, "Thickness", Config.Tracer.Thickness)
             SetIf(data.Tracer, "Transparency", Config.Tracer.Transparency)
             data.Tracer.Visible = true
-        elseif data.Tracer.Visible then data.Tracer.Visible = false end
+            if Config.Tracer.Glow then
+                local n = CollectGlowSegs({ data.Tracer })
+                DrawGlow(data.Glow.Tracer, GlowSegs, n, pTracer, Config.Tracer.Thickness, Config.Tracer.Transparency, Config.Tracer.GlowIntensity)
+            else
+                HideList(data.Glow.Tracer)
+            end
+        else
+            if data.Tracer.Visible then data.Tracer.Visible = false end
+            HideList(data.Glow.Tracer)
+        end
 
         -- Layout: acima da box -> Nome, Vida (modo texto); abaixo -> Arma, Distância.
         local scale = Config.DynamicScaling and math.max(0.4, 1 - (distance/maxDist)) or 1
@@ -4703,14 +5007,34 @@ local function ESP_Render()
                 data.HealthBarBackground.Visible = true
                 data.HealthBar.Position = Vector2.new(x - 6, y + 1 + ((height - 2) * (1 - hp)))
                 data.HealthBar.Size = Vector2.new(3, (height - 2) * hp)
-                SetIf(data.HealthBar, "Color", Color3.fromRGB(255,0,0):Lerp(Color3.fromRGB(0,255,0), hp))
+                local lifeColor = Color3.fromRGB(255,0,0):Lerp(Color3.fromRGB(0,255,0), hp)
+                SetIf(data.HealthBar, "Color", lifeColor)
                 SetIf(data.HealthBar, "Transparency", Config.Life.Transparency)
                 data.HealthBar.Visible = true
-            elseif data.HealthBar.Visible then
+                if Config.Life.Glow then
+                    -- A barra é um Square (sem From/To), então o halo é o
+                    -- contorno do retângulo dela, montado a partir de Position/Size.
+                    local p, sz = data.HealthBar.Position, data.HealthBar.Size
+                    local segs = data.LifeSegs
+                    segs[1][1], segs[1][2] = p, Vector2.new(p.X + sz.X, p.Y)
+                    segs[2][1], segs[2][2] = Vector2.new(p.X + sz.X, p.Y), Vector2.new(p.X + sz.X, p.Y + sz.Y)
+                    segs[3][1], segs[3][2] = Vector2.new(p.X + sz.X, p.Y + sz.Y), Vector2.new(p.X, p.Y + sz.Y)
+                    segs[4][1], segs[4][2] = Vector2.new(p.X, p.Y + sz.Y), p
+                    DrawGlow(data.Glow.Life, segs, 4, lifeColor, 1, Config.Life.Transparency, Config.Life.GlowIntensity)
+                else
+                    HideList(data.Glow.Life)
+                end
+            else
+                if data.HealthBar.Visible then
+                    data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
+                end
+                HideList(data.Glow.Life)
+            end
+        else
+            if data.HealthBar.Visible then
                 data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
             end
-        elseif data.HealthBar.Visible then
-            data.HealthBar.Visible, data.HealthBarOutline.Visible, data.HealthBarBackground.Visible = false, false, false
+            HideList(data.Glow.Life)
         end
 
         if showSkel then
@@ -4733,8 +5057,17 @@ local function ESP_Render()
                         l.Visible = true
                     else data.Skeleton[ci].Visible = false end
                 end
+                if Config.Skeleton.Glow then
+                    local n = CollectGlowSegs(data.Skeleton)
+                    DrawGlow(data.Glow.Skeleton, GlowSegs, n, pSkel, Config.Skeleton.Thickness, Config.Skeleton.Transparency, Config.Skeleton.GlowIntensity)
+                else
+                    HideList(data.Glow.Skeleton)
+                end
             end
-        else HideList(data.Skeleton) end
+        else
+            HideList(data.Skeleton)
+            HideList(data.Glow.Skeleton)
+        end
     end
 
     -- Jogadores que saíram do servidor: limpa o cache remanescente.
@@ -4775,6 +5108,29 @@ end
 local function FOVLine_SetEnabled(state)
     Config.FOVLine.Enabled = state
     ESP_UpdateLoop()
+end
+
+-- Controles de efeito de um elemento, dentro da própria seção dele.
+-- `cfg` é a tabela daquele elemento. As Flags reaproveitam os nomes antigos
+-- onde existiam, para os configs já salvos continuarem valendo.
+local function AddEffects(sec, cfg, flags)
+    if flags.team then
+        sec:AddToggle({
+            Flag = flags.team, Name = "Team Color", Default = cfg.Team,
+            Callback = function(v) cfg.Team = v end });
+    end
+    if flags.rgb then
+        sec:AddToggle({
+            Flag = flags.rgb, Name = "RGB", Default = cfg.RGB,
+            Callback = function(v) cfg.RGB = v end });
+    end
+    sec:AddToggle({
+        Flag = flags.glow, Name = "Brilho", Default = cfg.Glow,
+        Callback = function(v) cfg.Glow = v end });
+    sec:AddSlider({
+        Flag = flags.glowInt, Name = "Intensidade do Brilho", Min = 0, Max = 3,
+        Default = cfg.GlowIntensity, Round = 1,
+        Callback = function(v) cfg.GlowIntensity = v end });
 end
 
 local Tab = VisualContainer:DrawTab({
@@ -4820,6 +5176,8 @@ SecBox:AddToggle({
     Flag = "SecBox_CorGradiente", Default = Config.Box.GradientColor, Callback = function(v) Config.Box.GradientColor = v end });
 SecBox:AddSlider({
     Flag = "SecBox_TranspGradiente", Name = "Transp. Gradiente", Min = 0, Max = 1, Default = 0, Round = 2, Callback = function(v) Config.Box.GradientTransparency = v end });
+AddEffects(SecBox, Config.Box, { team = "SecTeam_Box", rgb = "SecRGB_RGBnaBox",
+    glow = "SecBox_Brilho", glowInt = "SecBox_IntensidadeBrilho" });
 
 -- Seção Tracers
 local SecTracer = Tab:DrawSection({ Name = "Tracers", Position = 'left' });
@@ -4832,6 +5190,8 @@ SecTracer:AddSlider({
     Flag = "SecTracer_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Tracer.Thickness = v end });
 SecTracer:AddSlider({
     Flag = "SecTracer_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Tracer.Transparency = v end });
+AddEffects(SecTracer, Config.Tracer, { team = "SecTeam_Tracer", rgb = "SecRGB_RGBnoTracer",
+    glow = "SecTracer_Brilho", glowInt = "SecTracer_IntensidadeBrilho" });
 
 -- Seção FOV Line (linha do centro da tela até o alvo do Silent Aim/Aimbot)
 local SecFOVLine = Tab:DrawSection({ Name = "FOV Line", Position = 'right' });
@@ -4846,6 +5206,8 @@ SecFOVLine:AddSlider({
     Flag = "SecFOVLine_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.FOVLine.Thickness = v end });
 SecFOVLine:AddSlider({
     Flag = "SecFOVLine_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.FOVLine.Transparency = v end });
+AddEffects(SecFOVLine, Config.FOVLine, { rgb = "SecRGB_RGBnaFOVLine",
+    glow = "SecFOVLine_Brilho", glowInt = "SecFOVLine_IntensidadeBrilho" });
 
 -- Seção Info
 local SecInfo = Tab:DrawSection({ Name = "Informações & Vida", Position = 'right' });
@@ -4872,6 +5234,15 @@ SecInfo:AddToggle({
     Flag = "SecInfo_CorFundo", Default = Config.Info.BackgroundColor, Callback = function(v) Config.Info.BackgroundColor = v end });
 SecInfo:AddSlider({
     Flag = "SecInfo_TranspFundo", Name = "Transp. Fundo", Min = 0, Max = 1, Default = 0.4, Round = 2, Callback = function(v) Config.Info.BackgroundTransparency = v end });
+-- Barra de vida: brilho próprio (o texto já é coberto por AddEffects acima).
+SecInfo:AddToggle({
+    Flag = "SecInfo_BrilhoVida", Name = "Brilho da Barra de Vida", Default = false,
+    Callback = function(v) Config.Life.Glow = v end });
+SecInfo:AddSlider({
+    Flag = "SecInfo_IntensidadeBrilhoVida", Name = "Intensidade da Vida", Min = 0, Max = 3, Default = 1, Round = 1,
+    Callback = function(v) Config.Life.GlowIntensity = v end });
+AddEffects(SecInfo, Config.Info, { team = "SecTeam_Texto", rgb = "SecRGB_RGBnoTexto",
+    glow = "SecInfo_Brilho", glowInt = "SecInfo_IntensidadeBrilho" });
 
 -- Seção Seta ESP (triângulo na cabeça do alvo)
 local SecArrow = Tab:DrawSection({ Name = "Seta ESP", Position = 'left' });
@@ -4884,6 +5255,8 @@ SecArrow:AddSlider({
     Flag = "SecArrow_Distncia", Name = "Distância da Cabeça", Min = 0, Max = 40, Default = 8, Callback = function(v) Config.Arrow.Gap = v end });
 SecArrow:AddSlider({
     Flag = "SecArrow_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Arrow.Transparency = v end });
+AddEffects(SecArrow, Config.Arrow, { team = "SecTeam_Seta", rgb = "SecArrow_RGB",
+    glow = "SecArrow_Brilho", glowInt = "SecArrow_IntensidadeBrilho" });
 
 -- Seção Circle ESP (círculo nos pés, do tamanho da hitbox)
 local SecCircle = Tab:DrawSection({ Name = "Circle ESP", Position = 'left' });
@@ -4896,6 +5269,8 @@ SecCircle:AddSlider({
     Flag = "SecCircle_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Circle.Thickness = v end });
 SecCircle:AddSlider({
     Flag = "SecCircle_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Circle.Transparency = v end });
+AddEffects(SecCircle, Config.Circle, { team = "SecTeam_Circulo", rgb = "SecCircle_RGB",
+    glow = "SecCircle_Brilho", glowInt = "SecCircle_IntensidadeBrilho" });
 
 -- Seção Esqueleto
 local SecSkel = Tab:DrawSection({ Name = "Esqueleto", Position = 'left' });
@@ -4906,52 +5281,51 @@ SecSkel:AddSlider({
     Flag = "SecSkel_Espessura", Name = "Espessura", Min = 1, Max = 10, Default = 1, Callback = function(v) Config.Skeleton.Thickness = v end });
 SecSkel:AddSlider({
     Flag = "SecSkel_Transparncia", Name = "Transparência", Min = 0, Max = 1, Default = 1, Round = 2, Callback = function(v) Config.Skeleton.Transparency = v end });
+AddEffects(SecSkel, Config.Skeleton, { team = "SecTeam_Esqueleto", rgb = "SecRGB_RGBnoEsqueleto",
+    glow = "SecSkel_Brilho", glowInt = "SecSkel_IntensidadeBrilho" });
 
--- Seção RGB
-local SecRGB = Tab:DrawSection({ Name = "Efeitos RGB", Position = 'right' });
-SecRGB:AddToggle({
-    Flag = "SecRGB_AtivarRGB", Name = "Ativar RGB", Callback = function(v) Config.Rainbow.Enabled = v end });
-SecRGB:AddSlider({
-    Flag = "SecRGB_Velocidade", Name = "Velocidade", Min = 0.01, Max = 0.2, Default = 0.05, Round = 2, Callback = function(v) Config.Rainbow.Speed = v end });
-SecRGB:AddToggle({
-    Flag = "SecRGB_RGBnaBox", Name = "RGB na Box", Default = true, Callback = function(v) Config.Rainbow.ApplyToBox = v end });
-SecRGB:AddToggle({
-    Flag = "SecRGB_RGBnoTracer", Name = "RGB no Tracer", Default = true, Callback = function(v) Config.Rainbow.ApplyToTracer = v end });
-SecRGB:AddToggle({
-    Flag = "SecRGB_RGBnoTexto", Name = "RGB no Texto", Default = true, Callback = function(v) Config.Rainbow.ApplyToText = v end });
-SecRGB:AddToggle({
-    Flag = "SecRGB_RGBnoEsqueleto", Name = "RGB no Esqueleto", Default = true, Callback = function(v) Config.Rainbow.ApplyToSkeleton = v end });
-SecRGB:AddToggle({
-    Flag = "SecRGB_RGBnaFOVLine", Name = "RGB na FOV Line", Default = true, Callback = function(v) Config.Rainbow.ApplyToFOVLine = v end });
+-- Seção Chams (Highlight no personagem inteiro)
+local SecChams = Tab:DrawSection({ Name = "Chams", Position = 'right' });
+SecChams:AddToggle({
+    Flag = "SecChams_Ativar", Name = "Ativar Chams", Default = false,
+    Callback = function(v) Config.Chams.Enabled = v end });
+SecChams:AddToggle({
+    Flag = "SecChams_Preenchimento", Name = "Preenchimento", Default = true,
+    Callback = function(v) Config.Chams.Fill = v end }).Link:AddColorPicker({
+    Flag = "SecChams_CorPreenchimento", Default = Config.Chams.FillColor,
+    Callback = function(v) Config.Chams.FillColor = v end });
+SecChams:AddSlider({
+    Flag = "SecChams_TranspPreenchimento", Name = "Transp. Preenchimento", Min = 0, Max = 1, Default = 0.5, Round = 2,
+    Callback = function(v) Config.Chams.FillTransparency = v end });
+SecChams:AddToggle({
+    Flag = "SecChams_Contorno", Name = "Contorno", Default = true,
+    Callback = function(v) Config.Chams.Outline = v end }).Link:AddColorPicker({
+    Flag = "SecChams_CorContorno", Default = Config.Chams.OutlineColor,
+    Callback = function(v) Config.Chams.OutlineColor = v end });
+SecChams:AddSlider({
+    Flag = "SecChams_TranspContorno", Name = "Transp. Contorno", Min = 0, Max = 1, Default = 0, Round = 2,
+    Callback = function(v) Config.Chams.OutlineTransparency = v end });
+SecChams:AddDropdown({
+    Flag = "SecChams_Profundidade", Name = "Profundidade", Default = "Always",
+    Values = {"Always", "Occluded"}, Callback = function(v) Config.Chams.DepthMode = v end });
+AddEffects(SecChams, Config.Chams, { rgb = "SecChams_RGB",
+    glow = "SecChams_Brilho", glowInt = "SecChams_IntensidadeBrilho" });
 
--- Seção Team Color
-local SecTeam = Tab:DrawSection({ Name = "Team Color", Position = 'right' });
-SecTeam:AddToggle({
+-- Seção Efeitos (masters): só o que é global. RGB e Team Color por elemento
+-- ficam nas seções de cada elemento.
+local SecFx = Tab:DrawSection({ Name = "Efeitos", Position = 'right' });
+SecFx:AddToggle({
+    Flag = "SecRGB_AtivarRGB", Name = "Ativar RGB", Default = false,
+    Callback = function(v) Config.Rainbow.Enabled = v end });
+SecFx:AddSlider({
+    Flag = "SecRGB_Velocidade", Name = "Velocidade RGB", Min = 0.01, Max = 0.2, Default = 0.05, Round = 2,
+    Callback = function(v) Config.Rainbow.Speed = v end });
+SecFx:AddToggle({
     Flag = "SecTeam_Ativar", Name = "Ativar Team Color", Default = false,
     Callback = function(v) Config.TeamColor.Enabled = v end });
-SecTeam:AddToggle({
+SecFx:AddToggle({
     Flag = "SecTeam_RGB", Name = "Team RGB (tons do time)", Default = false,
     Callback = function(v) Config.TeamColor.TeamRGB = v end });
-SecTeam:AddToggle({
-    Flag = "SecTeam_Box", Name = "Team Color na Box", Default = true,
-    Callback = function(v) Config.TeamColor.ApplyToBox = v end });
-SecTeam:AddToggle({
-    Flag = "SecTeam_Tracer", Name = "Team Color no Tracer", Default = true,
-    Callback = function(v) Config.TeamColor.ApplyToTracer = v end });
-SecTeam:AddToggle({
-    Flag = "SecTeam_Texto", Name = "Team Color no Texto", Default = true,
-    Callback = function(v) Config.TeamColor.ApplyToText = v end });
-SecTeam:AddToggle({
-    Flag = "SecTeam_Esqueleto", Name = "Team Color no Esqueleto", Default = true,
-    Callback = function(v) Config.TeamColor.ApplyToSkeleton = v end });
-SecTeam:AddToggle({
-    Flag = "SecTeam_Circulo", Name = "Team Color no Círculo", Default = true,
-    Callback = function(v) Config.TeamColor.ApplyToCircle = v end });
-SecTeam:AddToggle({
-    Flag = "SecTeam_Seta", Name = "Team Color na Seta", Default = true,
-    Callback = function(v) Config.TeamColor.ApplyToArrow = v end });
-
-
 
 local WorldTab = VisualContainer:DrawTab({
 	Name = " Mundo  ",
