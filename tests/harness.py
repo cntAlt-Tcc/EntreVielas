@@ -76,6 +76,7 @@ if SCRIPT_NAME == 'Script/A':
     main += '__M.Save = {\n' + ''.join(
         '    %s = %s,\n' % (x, x) for x in save_present) + '}\n'
     main += '__M.Lib = FiveSync\n'
+    main += '__M.SA = getgenv().Vsync_SilentAim\n'
 
 driver = ''
 if len(sys.argv) > 1:

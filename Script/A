@@ -3940,10 +3940,11 @@ local Config = {
     FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela",
                 RGB = true, Glow = false, GlowIntensity = 1 },
     -- Chams: Highlight no personagem (preenchimento + contorno). `DepthMode`
-    -- "Always" desenha por cima das paredes; "Occluded" respeita a geometria.
+    -- "AlwaysOnTop" desenha por cima das paredes; "Occluded" respeita a
+    -- geometria. São os únicos valores de Enum.HighlightDepthMode.
     Chams = { Enabled = false, Fill = true, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.5,
               Outline = true, OutlineColor = Color3.fromRGB(255, 255, 255), OutlineTransparency = 0,
-              DepthMode = "Always", RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+              DepthMode = "AlwaysOnTop", RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
     Rainbow = { Enabled = false, Speed = 0.05 },
     -- Team Color: cada elemento usa a cor do time do jogador em vez da cor fixa.
     -- TeamRGB anima dentro da faixa daquele matiz (verde -> vários tons de
@@ -4859,7 +4860,11 @@ local function ESP_Render()
             end
             SetIf(h, "FillColor", fillC)
             SetIf(h, "OutlineColor", lineC)
-            SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode])
+            -- Config antigo pode ter "Always" (nome que nunca existiu). Atribuir
+            -- nil em DepthMode estoura e derruba o frame inteiro, matando todo
+            -- o ESP, então cai no padrão quando o nome não resolve.
+            SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode]
+                or Enum.HighlightDepthMode.AlwaysOnTop)
         elseif data.Chams then
             ChamsDestroy(data)
         end
@@ -5306,8 +5311,8 @@ SecChams:AddSlider({
     Flag = "SecChams_TranspContorno", Name = "Transp. Contorno", Min = 0, Max = 1, Default = 0, Round = 2,
     Callback = function(v) Config.Chams.OutlineTransparency = v end });
 SecChams:AddDropdown({
-    Flag = "SecChams_Profundidade", Name = "Profundidade", Default = "Always",
-    Values = {"Always", "Occluded"}, Callback = function(v) Config.Chams.DepthMode = v end });
+    Flag = "SecChams_Profundidade", Name = "Profundidade", Default = "AlwaysOnTop",
+    Values = {"AlwaysOnTop", "Occluded"}, Callback = function(v) Config.Chams.DepthMode = v end });
 AddEffects(SecChams, Config.Chams, { rgb = "SecChams_RGB",
     glow = "SecChams_Brilho", glowInt = "SecChams_IntensidadeBrilho" });
 
