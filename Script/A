@@ -1,8 +1,615 @@
 
+--========================================================
+-- ENTRE VIELAS | FIVESYNC MODE SELECTOR
+-- Images + Sounds | Mobile + PC
+--========================================================
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- Escolha do modo, resolvida antes de qualquer coisa da lib rodar. Fica fora
+-- do bloco `do` porque o valor precisa sobreviver a ele; o resto do seletor
+-- vive dentro do bloco para não estourar o limite de 200 registradores do chunk.
+local SelectedMode
+do
+    local Players = game:GetService("Players")
+    local TweenService = game:GetService("TweenService")
+    local SoundService = game:GetService("SoundService")
+
+    local Player = Players.LocalPlayer
+    if not Player then
+        repeat task.wait() until Players.LocalPlayer
+        Player = Players.LocalPlayer
+    end
+
+    --========================================================
+    -- CONFIG
+    --========================================================
+
+    local C = {
+        Background = Color3.fromRGB(8, 8, 8),
+        Block = Color3.fromRGB(13, 13, 13),
+        Surface = Color3.fromRGB(22, 22, 22),
+        Hover = Color3.fromRGB(35, 35, 35),
+
+        Stroke = Color3.fromRGB(30, 30, 30),
+        StrokeHover = Color3.fromRGB(65, 65, 65),
+        Line = Color3.fromRGB(38, 38, 38),
+
+        White = Color3.fromRGB(245, 245, 245),
+        Gray = Color3.fromRGB(145, 145, 145),
+        DarkGray = Color3.fromRGB(85, 85, 85),
+    }
+
+    --========================================================
+    -- ASSETS
+    --========================================================
+
+    local Assets = {
+        Images = {
+            Logo = "rbxassetid://117056629401480",
+            Performance = "rbxassetid://10723395708",
+            Full = "rbxassetid://10723395215",
+        },
+
+        Sounds = {
+            Open = "rbxassetid://127441833735276",
+            Hover = "rbxassetid://117110103999401",
+            Select = "rbxassetid://92972986635552",
+        },
+
+        Volume = {
+            Open = 0.45,
+            Hover = 0.18,
+            Select = 0.45,
+        },
+    }
+
+    --========================================================
+    -- PARENT
+    --========================================================
+
+    local Parent
+
+    pcall(function()
+        if type(gethui) == "function" then
+            Parent = gethui()
+        end
+    end)
+
+    if not Parent then
+        Parent = Player:WaitForChild("PlayerGui")
+    end
+
+    local Previous = Parent:FindFirstChild("EV_ModeSelector")
+
+    if Previous then
+        Previous:Destroy()
+    end
+
+    --========================================================
+    -- SOUND SYSTEM
+    --========================================================
+    -- Próprio, e não `FiveSync:_PlaySound`: o seletor roda antes de a lib
+    -- existir, então não há cache de sons para reaproveitar aqui.
+
+    local Sounds = {}
+
+    local function SetupSound(Name, SoundId, Volume)
+        local SoundName = "EV_ModeSelector_" .. Name
+
+        local Sound = SoundService:FindFirstChild(SoundName)
+
+        if not Sound then
+            Sound = Instance.new("Sound")
+            Sound.Name = SoundName
+            Sound.Parent = SoundService
+        end
+
+        Sound.SoundId = SoundId
+        Sound.Volume = Volume
+        Sound.Looped = false
+
+        Sounds[Name] = Sound
+    end
+
+    for Name, SoundId in pairs(Assets.Sounds) do
+        SetupSound(Name, SoundId, Assets.Volume[Name] or 0.3)
+    end
+
+    local function PlaySound(Name)
+        local Sound = Sounds[Name]
+
+        if not Sound then
+            return
+        end
+
+        pcall(function()
+            Sound:Stop()
+            Sound.TimePosition = 0
+            Sound:Play()
+        end)
+    end
+
+    --========================================================
+    -- HELPERS
+    --========================================================
+
+    local function Create(Class, Properties, ParentObject)
+        local Object = Instance.new(Class)
+
+        for Property, Value in pairs(Properties) do
+            Object[Property] = Value
+        end
+
+        Object.Parent = ParentObject
+
+        return Object
+    end
+
+    local function Corner(Object, Radius)
+        Create("UICorner", {
+            CornerRadius = UDim.new(0, Radius),
+        }, Object)
+    end
+
+    local function Outline(Object, Color, Transparency)
+        return Create("UIStroke", {
+            Color = Color,
+            Thickness = 1,
+            Transparency = Transparency or 0,
+        }, Object)
+    end
+
+    local function Animate(Object, Duration, Properties)
+        local Tween = TweenService:Create(
+            Object,
+            TweenInfo.new(
+                Duration,
+                Enum.EasingStyle.Quint,
+                Enum.EasingDirection.Out
+            ),
+            Properties
+        )
+
+        Tween:Play()
+
+        return Tween
+    end
+
+    --========================================================
+    -- SCREEN GUI
+    --========================================================
+
+    local Gui = Create("ScreenGui", {
+        Name = "EV_ModeSelector",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        DisplayOrder = 999999,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    }, Parent)
+
+    local Overlay = Create("Frame", {
+        Name = "Overlay",
+        Size = UDim2.fromScale(1, 1),
+
+        BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 0.38,
+
+        BorderSizePixel = 0,
+    }, Gui)
+
+    --========================================================
+    -- MAIN WINDOW
+    --========================================================
+
+    local Main = Create("Frame", {
+        Name = "Main",
+
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+
+        Size = UDim2.new(0.9, 0, 0, 250),
+
+        BackgroundColor3 = C.Background,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+    }, Overlay)
+
+    Create("UISizeConstraint", {
+        MinSize = Vector2.new(280, 250),
+        MaxSize = Vector2.new(430, 250),
+    }, Main)
+
+    Corner(Main, 6)
+    Outline(Main, C.Stroke, 0)
+
+    local Scale = Create("UIScale", {
+        Scale = 0.94,
+    }, Main)
+
+    --========================================================
+    -- HEADER
+    --========================================================
+
+    local Header = Create("Frame", {
+        Position = UDim2.fromOffset(18, 16),
+        Size = UDim2.new(1, -36, 0, 29),
+
+        BackgroundTransparency = 1,
+    }, Main)
+
+    local Logo = Create("Frame", {
+        Size = UDim2.fromOffset(29, 29),
+
+        BackgroundColor3 = C.Surface,
+        BorderSizePixel = 0,
+    }, Header)
+
+    Corner(Logo, 4)
+    Outline(Logo, C.Line, 0)
+
+    Create("ImageLabel", {
+        Name = "LogoImage",
+
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+
+        Size = UDim2.new(1, -5, 1, -5),
+
+        BackgroundTransparency = 1,
+
+        Image = Assets.Images.Logo,
+        ScaleType = Enum.ScaleType.Fit,
+
+        ImageColor3 = C.White,
+    }, Logo)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(39, 0),
+        Size = UDim2.new(0.6, 0, 0, 16),
+
+        BackgroundTransparency = 1,
+
+        Text = "ENTREVIELAS",
+        TextColor3 = C.White,
+
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, Header)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(39, 16),
+        Size = UDim2.new(0.7, 0, 0, 11),
+
+        BackgroundTransparency = 1,
+
+        Text = "FIVESYNC INTERFACE",
+        TextColor3 = C.DarkGray,
+
+        Font = Enum.Font.GothamMedium,
+        TextSize = 8,
+
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, Header)
+
+    Create("TextLabel", {
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, 0, 0, 5),
+        Size = UDim2.fromOffset(70, 18),
+
+        BackgroundTransparency = 1,
+
+        Text = "SELECT / 01",
+        TextColor3 = C.DarkGray,
+
+        Font = Enum.Font.GothamMedium,
+        TextSize = 8,
+
+        TextXAlignment = Enum.TextXAlignment.Right,
+    }, Header)
+
+    --========================================================
+    -- DIVIDER
+    --========================================================
+
+    Create("Frame", {
+        Position = UDim2.fromOffset(18, 57),
+        Size = UDim2.new(1, -36, 0, 1),
+
+        BackgroundColor3 = C.Line,
+        BorderSizePixel = 0,
+    }, Main)
+
+    --========================================================
+    -- TITLE
+    --========================================================
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(20, 76),
+        Size = UDim2.new(1, -40, 0, 25),
+
+        BackgroundTransparency = 1,
+
+        Text = "Deseja usar o modo:",
+        TextColor3 = C.White,
+
+        Font = Enum.Font.GothamBold,
+        TextSize = 19,
+
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, Main)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(21, 103),
+        Size = UDim2.new(1, -42, 0, 15),
+
+        BackgroundTransparency = 1,
+
+        Text = "Selecione uma configuração para continuar.",
+        TextColor3 = C.Gray,
+
+        Font = Enum.Font.Gotham,
+        TextSize = 10,
+
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, Main)
+
+    --========================================================
+    -- MODE BUTTONS
+    --========================================================
+
+    local Options = Create("Frame", {
+        Position = UDim2.fromOffset(19, 135),
+        Size = UDim2.new(1, -38, 0, 73),
+
+        BackgroundTransparency = 1,
+    }, Main)
+
+    Create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal,
+        HorizontalAlignment = Enum.HorizontalAlignment.Center,
+        VerticalAlignment = Enum.VerticalAlignment.Center,
+
+        Padding = UDim.new(0, 10),
+    }, Options)
+
+    local Selected = false
+
+    local function SelectMode(Choice)
+        if Selected then
+            return
+        end
+
+        Selected = true
+
+        PlaySound("Select")
+
+        SelectedMode = Choice
+
+        _G.EntreVielasMode = Choice
+
+        pcall(function()
+            getgenv().EntreVielasMode = Choice
+        end)
+
+        print("[EntreVielas] Selected: " .. Choice)
+
+        local Callback = _G.EntreVielasModeCallback
+
+        if type(Callback) == "function" then
+            task.spawn(Callback, Choice)
+        end
+
+        Animate(Scale, 0.2, {
+            Scale = 0.95,
+        })
+
+        Animate(Overlay, 0.22, {
+            BackgroundTransparency = 1,
+        })
+
+        task.delay(0.23, function()
+            Gui:Destroy()
+        end)
+    end
+
+    --========================================================
+    -- MODE CREATION
+    --========================================================
+
+    local function CreateMode(Name, Description, Image, Choice)
+        local Button = Create("TextButton", {
+            Name = Name,
+
+            Size = UDim2.new(0.5, -5, 1, 0),
+
+            BackgroundColor3 = C.Block,
+            BorderSizePixel = 0,
+
+            AutoButtonColor = false,
+            Text = "",
+        }, Options)
+
+        Corner(Button, 5)
+
+        local Border = Outline(Button, C.Stroke, 0)
+
+        local IconBox = Create("Frame", {
+            Position = UDim2.fromOffset(11, 19),
+            Size = UDim2.fromOffset(34, 34),
+
+            BackgroundColor3 = C.Surface,
+            BorderSizePixel = 0,
+        }, Button)
+
+        Corner(IconBox, 4)
+        Outline(IconBox, C.Stroke, 0)
+
+        Create("ImageLabel", {
+            Name = "ModeIcon",
+
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.5, 0.5),
+
+            Size = UDim2.fromOffset(19, 19),
+
+            BackgroundTransparency = 1,
+
+            Image = Image,
+            ImageColor3 = C.White,
+
+            ScaleType = Enum.ScaleType.Fit,
+        }, IconBox)
+
+        Create("TextLabel", {
+            Position = UDim2.fromOffset(54, 17),
+            Size = UDim2.new(1, -62, 0, 18),
+
+            BackgroundTransparency = 1,
+
+            Text = Name,
+            TextColor3 = C.White,
+
+            Font = Enum.Font.GothamBold,
+            TextSize = 11,
+
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, Button)
+
+        Create("TextLabel", {
+            Position = UDim2.fromOffset(54, 37),
+            Size = UDim2.new(1, -59, 0, 15),
+
+            BackgroundTransparency = 1,
+
+            Text = Description,
+            TextColor3 = C.Gray,
+
+            Font = Enum.Font.Gotham,
+            TextSize = 8,
+
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, Button)
+
+        Button.MouseEnter:Connect(function()
+            if Selected then
+                return
+            end
+
+            PlaySound("Hover")
+
+            Animate(Button, 0.15, {
+                BackgroundColor3 = C.Surface,
+            })
+
+            Animate(Border, 0.15, {
+                Color = C.StrokeHover,
+            })
+        end)
+
+        Button.MouseLeave:Connect(function()
+            if Selected then
+                return
+            end
+
+            Animate(Button, 0.15, {
+                BackgroundColor3 = C.Block,
+            })
+
+            Animate(Border, 0.15, {
+                Color = C.Stroke,
+            })
+        end)
+
+        Button.Activated:Connect(function()
+            if Selected then
+                return
+            end
+
+            Animate(Button, 0.12, {
+                BackgroundColor3 = C.Hover,
+            })
+
+            Animate(Border, 0.12, {
+                Color = C.White,
+            })
+
+            SelectMode(Choice)
+        end)
+
+        return Button
+    end
+
+    --========================================================
+    -- MODES
+    --========================================================
+
+    CreateMode(
+        "PERFORMANCE",
+        "Configuração otimizada",
+        Assets.Images.Performance,
+        "Performance"
+    )
+
+    CreateMode(
+        "FULL",
+        "Experiência completa",
+        Assets.Images.Full,
+        "Full"
+    )
+
+    --========================================================
+    -- FOOTER
+    --========================================================
+
+    Create("Frame", {
+        Position = UDim2.fromOffset(18, 222),
+        Size = UDim2.new(1, -36, 0, 1),
+
+        BackgroundColor3 = C.Line,
+        BorderSizePixel = 0,
+    }, Main)
+
+    Create("TextLabel", {
+        Position = UDim2.fromOffset(19, 229),
+        Size = UDim2.new(1, -38, 0, 12),
+
+        BackgroundTransparency = 1,
+
+        Text = "ENTREVIELAS / MODE SELECTOR",
+        TextColor3 = C.DarkGray,
+
+        Font = Enum.Font.GothamMedium,
+        TextSize = 8,
+
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, Main)
+
+    --========================================================
+    -- ENTRANCE ANIMATION
+    --========================================================
+
+    PlaySound("Open")
+
+    Animate(Scale, 0.4, {
+        Scale = 1,
+    })
+
+    -- Bloqueia até o usuário escolher: a lib só carrega depois disso.
+    while not SelectedMode do
+        task.wait(0.05)
+    end
+end
+
 local FiveSync = loadstring(game:HttpGet("https://raw.githubusercontent.com/cntAlt-Tcc/EntreVielas/main/inject.lua"))();
--- Otimização automática: em mobile liga o modo leve da lib (menos animações,
--- blur, hover e loops mais espaçados). No desktop mantém o visual normal.
-if FiveSync:AutoOptimize({
+-- Modo leve da lib (menos animações, blur, hover e loops mais espaçados).
+-- Aplicado quando o usuário escolhe PERFORMANCE no seletor ou está no mobile;
+-- no FULL de desktop a lib roda com o visual completo.
+local MOBILE_CONFIG = {
     DisableBlur = true,
     DisableHover = true,
     DisableAnimations = true,
@@ -14,10 +621,14 @@ if FiveSync:AutoOptimize({
     ColorPickerDelay = 0.03,
     CloseButtonDelay = 0.5,
     ConfigRefreshDelay = 0.5,
-}) then
-    print("[Vsync] Mobile detectado - modo otimizado ativado.")
+}
+-- A escolha manda: PERFORMANCE liga o modo leve, FULL roda o visual completo
+-- mesmo no mobile (antes disso o mobile era otimizado sem perguntar).
+if SelectedMode == "Performance" then
+    FiveSync:OptimizeMode(true, MOBILE_CONFIG)
+    print("[Vsync] Modo PERFORMANCE - otimizado.")
 else
-    print("[Vsync] Desktop detectado - modo normal.")
+    print("[Vsync] Modo FULL - visual completo.")
 end
 -- Tema: preto e branco neon (branco bem brilhante sobre preto)
 FiveSync.Colors.Highlight       = Color3.fromRGB(255, 255, 255)
