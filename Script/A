@@ -1930,6 +1930,43 @@ local function WS_AddTargetKey()
     end)
 end
 
+-- Tecla que limpa a whitelist inteira. Mesmo padrão da Whitelist Key: o global
+-- é semeado aqui e lido dentro do handler, porque o Callback do AddKeybind só
+-- roda no rebind (não no load).
+getgenv().Whitelist_ClearKey = getgenv().Whitelist_ClearKey or ""
+
+local function ClearWhitelist(announce)
+    local count = 0
+    for _ in pairs(getgenv().Aimbot_Whitelist) do count = count + 1 end
+    getgenv().Aimbot_Whitelist = {}
+    refreshW()
+    if announce then
+        Notifier.new({
+            Title = "Whitelist",
+            Content = count > 0 and (count .. " removido(s)") or "Lista já estava vazia",
+            Duration = 1.5,
+            Icon = "rbxassetid://117056629401480",
+        })
+    end
+    return count
+end
+
+local function WS_ClearKey()
+    local last
+    UserInputService.InputBegan:Connect(function(input, typing)
+        if typing then return end
+        local key = getgenv().Whitelist_ClearKey
+        -- Vazio/nil = bind desligada. Sem essa guarda, InputMatchesKey("") nunca
+        -- casaria mas o custo do handler rodaria em toda tecla à toa.
+        if not key or key == "" then return end
+        if not InputMatchesKey(input, key) then return end
+        if os.clock() - (last or 0) < 0.15 then return end
+        last = os.clock()
+        ClearWhitelist(true)
+        FiveSync:_PlaySound("ToggleOff")
+    end)
+end
+
 local pDrop = WSection:AddDropdown({
     Flag = "WSection_SelecionarJogador", Name = "Selecionar Jogador", Default = "Atualize...", Values = {"Atualize..."}, Callback = function(v) end })
 WSection:AddButton({ Name = "Atualizar Jogadores", Callback = function()
@@ -1950,17 +1987,23 @@ WSection:AddButton({ Name = "Adicionar", Callback = function()
     end
     refreshW()
 end });
-WSection:AddButton({ Name = "Limpar", Callback = function() getgenv().Aimbot_Whitelist = {}; refreshW() end });
+WSection:AddButton({ Name = "Limpar", Callback = function() ClearWhitelist(false) end });
 
 -- Whitelist Key: tecla que adiciona o alvo atual da mira à whitelist
 WSection:AddKeybind({
     Flag = "WSection_WhitelistKey", Name = "Whitelist Key", Default = "Y",
     Callback = function(v) getgenv().Whitelist_Key = v end });
+-- Tecla que limpa a whitelist inteira. Default vazio = desligada até o usuário
+-- escolher uma tecla.
+WSection:AddKeybind({
+    Flag = "WSection_WhitelistClearKey", Name = "Limpar Whitelist (Tecla)", Default = nil,
+    Callback = function(v) getgenv().Whitelist_ClearKey = v or "" end });
 WSection:AddButton({ Name = "Add Alvo da Mira", Callback = function()
     AddAimTargetToWhitelist()
 end });
 
 WS_AddTargetKey()
+WS_ClearKey()
 
 refreshW()
 
@@ -1995,6 +2038,10 @@ getgenv().SilentAim_ShowTarget = false
 getgenv().SilentAim_HitChance  = 100
 getgenv().SilentAim_Prediction = 0
 getgenv().SilentAim_NPCs       = true
+-- 360: ignora o FOV e considera alvos em qualquer direção (inclusive atrás).
+-- O wall check passa a ser obrigatório nesse modo, mesmo com o toggle de
+-- wall check desligado, senão o tiro atravessaria parede sem filtro nenhum.
+getgenv().SilentAim_360        = false
 -- Ghost Mode (indetectável): instala o hook de mira mexendo direto na metatable
 -- (getrawmetatable + setreadonly) em vez de chamar hookmetamethod, que é o vetor
 -- que detectores de "IndexInstance" procuram.
@@ -2061,7 +2108,9 @@ end)
 local SA_FOVConn = nil
 local function SA_FOVRender()
     if SA_FOVCircle then
-        if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowFOV then
+        -- Em 360 o FOV não limita nada, então desenhar o círculo seria mentira
+        -- sobre a área considerada.
+        if getgenv().SilentAim_Ativo and getgenv().SilentAim_ShowFOV and not getgenv().SilentAim_360 then
             SA_FOVCircle.Visible  = true
             -- Centro do FOV: cursor quando "Seguir Mouse" está ligado, senão o
             -- meio da tela. É o mesmo centro usado por SA_UpdateTarget, então o
@@ -2088,8 +2137,14 @@ local function SA_FOVRender()
 end
 
 -- // Verificação de parede
+-- No modo 360 o alvo pode estar atrás do personagem, então a linha de visão
+-- deixa de ser implícita: o wall check vira obrigatório e ignora o toggle.
+local function SA_WallCheckActive()
+    return getgenv().SilentAim_WallCheck or getgenv().SilentAim_360
+end
+
 local function SA_CheckWall(targetPos, otherChar)
-    if not getgenv().SilentAim_WallCheck then return true end
+    if not SA_WallCheckActive() then return true end
     local ok, res = pcall(function()
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
@@ -2100,10 +2155,16 @@ local function SA_CheckWall(targetPos, otherChar)
 end
 
 -- // Considera um modelo (player ou NPC) como candidato
+-- Em 360 o FOV não filtra nada e o alvo pode estar fora da tela (inclusive
+-- atrás da câmera). Nesse caso a ordenação por distância em tela perde o
+-- sentido — as coordenadas de um alvo atrás da câmera vêm invertidas — então
+-- o critério passa a ser a distância real no mundo: o mais perto ganha.
 local function SA_ConsiderModel(model, center, best)
     if model == LocalPlayer.Character then return best end
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return best end
+
+    local full360 = getgenv().SilentAim_360
 
     local part
     if getgenv().SilentAim_TargetPart == "Nearest" then
@@ -2111,11 +2172,16 @@ local function SA_ConsiderModel(model, center, best)
         for _, name in ipairs(SA_ValidParts) do
             local p = model:FindFirstChild(name)
             if p and p:IsA("BasePart") then
-                local pos, onScreen = Camera:WorldToViewportPoint(p.Position)
-                if onScreen and pos.Z > 0 then
-                    local d = (center - Vector2.new(pos.X, pos.Y)).Magnitude
-                    if d < partDist then partDist = d; part = p end
+                local score
+                if full360 then
+                    score = (Camera.CFrame.Position - p.Position).Magnitude
+                else
+                    local pos, onScreen = Camera:WorldToViewportPoint(p.Position)
+                    if onScreen and pos.Z > 0 then
+                        score = (center - Vector2.new(pos.X, pos.Y)).Magnitude
+                    end
                 end
+                if score and score < partDist then partDist = score; part = p end
             end
         end
     else
@@ -2123,11 +2189,19 @@ local function SA_ConsiderModel(model, center, best)
     end
     if not part then return best end
 
+    if full360 then
+        local dist = (Camera.CFrame.Position - part.Position).Magnitude
+        if best and dist >= best.dist then return best end
+        if not SA_CheckWall(part.Position, model) then return best end
+        return { model = model, part = part, pos = part.Position, dist = dist }
+    end
+
     local ok, pos, onScreen = pcall(function() return Camera:WorldToViewportPoint(part.Position) end)
     if not ok or not onScreen or pos.Z <= 0 then return best end
 
     local dist = (center - Vector2.new(pos.X, pos.Y)).Magnitude
     if dist > getgenv().SilentAim_FOV or (best and dist >= best.dist) then return best end
+    if not SA_CheckWall(part.Position, model) then return best end
 
     return { model = model, part = part, pos = part.Position, dist = dist }
 end
@@ -2176,8 +2250,6 @@ local function SA_UpdateTarget()
             best = SA_ConsiderModel(model, center, best)
         end
     end
-
-    if best and not SA_CheckWall(best.pos, best.model) then best = nil end
 
     if best then
         SA_TargetPart = best.part
@@ -2448,6 +2520,20 @@ SAConfig:AddToggle({
     Flag = "SAConfig_TeamCheck", Name = "Team Check", Default = false, Callback = function(v) getgenv().SilentAim_TeamCheck = v end });
 SAConfig:AddToggle({
     Flag = "SAConfig_WallCheck", Name = "Wall Check", Default = true, Callback = function(v) getgenv().SilentAim_WallCheck = v end });
+-- 360 ignora o FOV e alcança qualquer direção. O wall check continua valendo
+-- (e é forçado) porque sem ele o tiro sairia através da parede.
+SAConfig:AddToggle({
+    Flag = "SAConfig_Modo360", Name = "Silent Aim 360°", Default = false, Callback = function(v)
+        getgenv().SilentAim_360 = v
+        if v then
+            Notifier.new({
+                Title = "Silent Aim 360°",
+                Content = "FOV ignorado. Wall check ativo por obrigação.",
+                Duration = 2,
+                Icon = "rbxassetid://117056629401480",
+            })
+        end
+    end });
 SAConfig:AddToggle({
     Flag = "SAConfig_FireFuncCheck", Name = "Fire Func Check", Default = false, Callback = function(v) getgenv().SilentAim_FireFunc = v end });
 SAConfig:AddToggle({
@@ -3151,7 +3237,13 @@ local Config = {
     Arrow = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Size = 14, Transparency = 1, Gap = 8 },
     Circle = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Filled = false },
     FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela" },
-    Rainbow = { Enabled = false, Speed = 0.05, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true, ApplyToSkeleton = true, ApplyToFOVLine = true }
+    Rainbow = { Enabled = false, Speed = 0.05, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true, ApplyToSkeleton = true, ApplyToFOVLine = true },
+    -- Team Color: cada elemento usa a cor do time do jogador em vez da cor fixa.
+    -- TeamRGB anima dentro da faixa daquele matiz (verde -> vários tons de
+    -- verde), em vez do arco-íris completo.
+    TeamColor = { Enabled = false, ApplyToBox = true, ApplyToTracer = true, ApplyToText = true,
+                  ApplyToSkeleton = true, ApplyToCircle = true, ApplyToArrow = true,
+                  TeamRGB = false }
 }
 
 local ESP_Cache = {}
@@ -3159,6 +3251,28 @@ local ESP_Cache = {}
 -- frame. Invalidado quando `char` muda ou a parte sai da arvore.
 local ESP_PartsCache = {}
 local rainbowHue = 0
+local teamHue = 0
+
+-- Cor do time do jogador. `TeamColor` é um BrickColor, cuja cor real vem de
+-- `.Color`. Jogo sem teams (FFA) devolve nil, e o chamador cai na cor fixa.
+local function ESP_TeamColor(player)
+    local team = player.Team
+    if team and team.TeamColor then return team.TeamColor.Color end
+    if player.TeamColor then return player.TeamColor.Color end
+    return nil
+end
+
+-- Tons dentro da faixa do time: em vez de varrer o arco-íris inteiro, o matiz
+-- oscila em torno do matiz do time e a saturação/brilho variam juntos. Um time
+-- verde gera vários verdes; um time vermelho, vários vermelhos.
+local function ESP_TeamTint(base, phase)
+    local h, s, v = base:ToHSV()
+    if s < 0.12 then return base end
+    local hue = (h + (phase - 0.5) * 0.10) % 1
+    local sat = math.clamp(s * (0.7 + phase * 0.6), 0, 1)
+    local val = math.clamp(v * (0.72 + (1 - phase) * 0.45), 0, 1)
+    return Color3.fromHSV(hue, sat, val)
+end
 local bodyConnections = {
     R15 = {
         {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"}, {"LowerTorso", "LeftUpperLeg"}, {"LowerTorso", "RightUpperLeg"},
@@ -3691,12 +3805,18 @@ local function ESP_Render()
 
     -- Cores base computadas uma vez por frame (não por jogador).
     local rb = Config.Rainbow.Enabled
+    local tc = Config.TeamColor
+    local teamMode = tc.Enabled
     local boxColor = (rb and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.Color
     local fillColor = (rb and Config.Rainbow.ApplyToBox) and rainbowColor or Config.Box.FillColor
     local textColor = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Info.Color
     local skelColor = (rb and Config.Rainbow.ApplyToSkeleton) and rainbowColor or Config.Skeleton.Color
     local tracerColor = (rb and Config.Rainbow.ApplyToTracer) and rainbowColor or Config.Tracer.Color
     local circleColor = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Circle.Color
+
+    if teamMode then
+        if tc.TeamRGB then teamHue = (teamHue + Config.Rainbow.Speed) % 1 end
+    end
 
     local camPos = Camera.CFrame.Position
     local maxDist = Config.MaxDistance
@@ -3767,13 +3887,37 @@ local function ESP_Render()
         if not ESP_Cache[player] then InitPlayerESP(player) end
         local data = ESP_Cache[player]
 
+        -- Cores efetivas deste jogador. Team Color vence o RGB global: quando
+        -- os dois estão ligados, a cor do time é a base e o RGB só varia os
+        -- tons dentro dela. Sem time (FFA), cai na cor fixa/RGB de sempre.
+        local pBox, pFill, pText, pSkel, pTracer, pCircle = boxColor, fillColor, textColor, skelColor, tracerColor, circleColor
+        local pArrow = (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Arrow.Color
+        if teamMode then
+            local base = ESP_TeamColor(player)
+            if base then
+                local b, f
+                if tc.TeamRGB then
+                    b = ESP_TeamTint(base, teamHue)
+                    f = b
+                else
+                    b, f = base, base
+                end
+                if tc.ApplyToBox then pBox, pFill = b, f end
+                if tc.ApplyToTracer then pTracer = b end
+                if tc.ApplyToText then pText = b end
+                if tc.ApplyToSkeleton then pSkel = b end
+                if tc.ApplyToCircle then pCircle = b end
+                if tc.ApplyToArrow then pArrow = b end
+            end
+        end
+
         local footPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, hum.HipHeight + (hrp.Size.Y / 2) + 0.5, 0))
         local height = math.abs(headPos.Y - footPos.Y)
         local width = height / 2
         local x, y = headPos.X - width / 2, headPos.Y
 
         if Config.Box.Enabled then
-            DrawESPBox(data, Config.Box.Type, char, x, y, width, height, boxColor, fillColor, rainbowColor)
+            DrawESPBox(data, Config.Box.Type, char, x, y, width, height, pBox, pFill, rainbowColor)
         else
             for j = 1, 8 do local l = data.Box["Line"..j]; if l.Visible then l.Visible = false end end
             if data.BoxFill.Visible then data.BoxFill.Visible = false end
@@ -3788,14 +3932,14 @@ local function ESP_Render()
             data.Arrow.PointA = tip
             data.Arrow.PointB = Vector2.new(headPos.X - asz / 2, tip.Y - asz)
             data.Arrow.PointC = Vector2.new(headPos.X + asz / 2, tip.Y - asz)
-            SetIf(data.Arrow, "Color", (rb and Config.Rainbow.ApplyToText) and rainbowColor or Config.Arrow.Color)
+            SetIf(data.Arrow, "Color", pArrow)
             SetIf(data.Arrow, "Transparency", Config.Arrow.Transparency)
             data.Arrow.Filled = true
             data.Arrow.Visible = true
         elseif data.Arrow.Visible then data.Arrow.Visible = false end
 
         if Config.Circle.Enabled then
-            DrawCircle3D(data, char, circleColor)
+            DrawCircle3D(data, char, pCircle)
         else
             HideList(data.Circle3D)
             HideList(data.Circle3DFill)
@@ -3804,7 +3948,7 @@ local function ESP_Render()
         if Config.Tracer.Enabled then
             local origin = Config.Tracer.Origin == "Top" and Vector2.new(Camera.ViewportSize.X/2, 0) or Config.Tracer.Origin == "Bottom" and Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y) or UserInputService:GetMouseLocation()
             data.Tracer.From, data.Tracer.To = origin, Vector2.new(headPos.X, headPos.Y + height/2)
-            SetIf(data.Tracer, "Color", tracerColor)
+            SetIf(data.Tracer, "Color", pTracer)
             SetIf(data.Tracer, "Thickness", Config.Tracer.Thickness)
             SetIf(data.Tracer, "Transparency", Config.Tracer.Transparency)
             data.Tracer.Visible = true
@@ -3820,7 +3964,7 @@ local function ESP_Render()
             data.HealthText.Text = math.floor(hum.Health).." HP"
             data.HealthText.Position = Vector2.new(headPos.X, topOff - ts)
             data.HealthText.Visible = true
-            StyleText(data.HealthText, textColor, ts, Config.Life.Transparency)
+            StyleText(data.HealthText, pText, ts, Config.Life.Transparency)
             StyleTextBackground(data.HealthText, ts)
             topOff = topOff - ts - 2
         else HideText(data.HealthText) end
@@ -3829,7 +3973,7 @@ local function ESP_Render()
             data.Name.Text = player.DisplayName or player.Name
             data.Name.Position = Vector2.new(headPos.X, topOff - ts)
             data.Name.Visible = true
-            StyleText(data.Name, textColor, ts, Config.Info.Transparency)
+            StyleText(data.Name, pText, ts, Config.Info.Transparency)
             StyleTextBackground(data.Name, ts)
             topOff = topOff - ts - 2
         else HideText(data.Name) end
@@ -3840,7 +3984,7 @@ local function ESP_Render()
                 data.Item.Text = tool.Name
                 data.Item.Position = Vector2.new(headPos.X, botOff + ts)
                 data.Item.Visible = true
-                StyleText(data.Item, textColor, ts, Config.Info.Transparency)
+                StyleText(data.Item, pText, ts, Config.Info.Transparency)
                 StyleTextBackground(data.Item, ts)
                 botOff = botOff + ts + 2
             else HideText(data.Item) end
@@ -3850,7 +3994,7 @@ local function ESP_Render()
             data.Distance.Text = string.format("%dM", math.floor(distance))
             data.Distance.Position = Vector2.new(headPos.X, botOff + ts)
             data.Distance.Visible = true
-            StyleText(data.Distance, textColor, ts, Config.Info.Transparency)
+            StyleText(data.Distance, pText, ts, Config.Info.Transparency)
             StyleTextBackground(data.Distance, ts)
             botOff = botOff + ts + 2
         else HideText(data.Distance) end
@@ -3891,7 +4035,7 @@ local function ESP_Render()
                     if a and b and oA and oB then
                         local l = data.Skeleton[ci]
                         l.From, l.To = Vector2.new(a[1].X, a[1].Y), Vector2.new(b[1].X, b[1].Y)
-                        SetIf(l, "Color", skelColor)
+                        SetIf(l, "Color", pSkel)
                         SetIf(l, "Thickness", Config.Skeleton.Thickness)
                         SetIf(l, "Transparency", Config.Skeleton.Transparency)
                         l.Visible = true
@@ -4087,6 +4231,33 @@ SecRGB:AddToggle({
     Flag = "SecRGB_RGBnoEsqueleto", Name = "RGB no Esqueleto", Default = true, Callback = function(v) Config.Rainbow.ApplyToSkeleton = v end });
 SecRGB:AddToggle({
     Flag = "SecRGB_RGBnaFOVLine", Name = "RGB na FOV Line", Default = true, Callback = function(v) Config.Rainbow.ApplyToFOVLine = v end });
+
+-- Seção Team Color
+local SecTeam = Tab:DrawSection({ Name = "Team Color", Position = 'right' });
+SecTeam:AddToggle({
+    Flag = "SecTeam_Ativar", Name = "Ativar Team Color", Default = false,
+    Callback = function(v) Config.TeamColor.Enabled = v end });
+SecTeam:AddToggle({
+    Flag = "SecTeam_RGB", Name = "Team RGB (tons do time)", Default = false,
+    Callback = function(v) Config.TeamColor.TeamRGB = v end });
+SecTeam:AddToggle({
+    Flag = "SecTeam_Box", Name = "Team Color na Box", Default = true,
+    Callback = function(v) Config.TeamColor.ApplyToBox = v end });
+SecTeam:AddToggle({
+    Flag = "SecTeam_Tracer", Name = "Team Color no Tracer", Default = true,
+    Callback = function(v) Config.TeamColor.ApplyToTracer = v end });
+SecTeam:AddToggle({
+    Flag = "SecTeam_Texto", Name = "Team Color no Texto", Default = true,
+    Callback = function(v) Config.TeamColor.ApplyToText = v end });
+SecTeam:AddToggle({
+    Flag = "SecTeam_Esqueleto", Name = "Team Color no Esqueleto", Default = true,
+    Callback = function(v) Config.TeamColor.ApplyToSkeleton = v end });
+SecTeam:AddToggle({
+    Flag = "SecTeam_Circulo", Name = "Team Color no Círculo", Default = true,
+    Callback = function(v) Config.TeamColor.ApplyToCircle = v end });
+SecTeam:AddToggle({
+    Flag = "SecTeam_Seta", Name = "Team Color na Seta", Default = true,
+    Callback = function(v) Config.TeamColor.ApplyToArrow = v end });
 
 
 
