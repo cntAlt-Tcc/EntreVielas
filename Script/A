@@ -390,7 +390,11 @@ do
 
         SelectedMode = Choice
 
-        _G.EntreVielasMode = Choice
+        -- Alguns executores expõem _G como readonly; o modo já está em
+        -- SelectedMode, então uma falha aqui não pode derrubar a seleção.
+        pcall(function()
+            _G.EntreVielasMode = Choice
+        end)
 
         pcall(function()
             getgenv().EntreVielasMode = Choice
