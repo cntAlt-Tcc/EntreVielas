@@ -69,8 +69,10 @@ if SCRIPT_NAME == 'Script/A':
     main += '\n__M.ESP = {\n' + ''.join(
         '    %s = %s,\n' % (x, x) for x in present) + '}\n'
     save_syms = ['ConfigManager', 'Config', '__FS']
+    # __FS vive no mock, nao no script: o regex contra `main` nunca o acharia.
     save_present = [x for x in save_syms
-                    if _re.search(r'(^|\n)(local\s+)?function\s+%s\s*\(|\b%s\s*=' % (x, x), main)]
+                    if x == '__FS'
+                    or _re.search(r'(^|\n)(local\s+)?function\s+%s\s*\(|\b%s\s*=' % (x, x), main)]
     main += '__M.Save = {\n' + ''.join(
         '    %s = %s,\n' % (x, x) for x in save_present) + '}\n'
     main += '__M.Lib = FiveSync\n'
