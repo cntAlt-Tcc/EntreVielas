@@ -1311,12 +1311,54 @@ getgenv().Desync_Ativo      = false
 getgenv().Desync_Forca      = 5     -- studs de deslocamento aplicados no root
 getgenv().Desync_MostrarBox = false
 getgenv().Desync_BoxColor   = Color3.fromRGB(255, 60, 60)
+-- Lado do deslocamento, no espaço LOCAL do personagem: X positivo é a direita
+-- dele, Z negativo é a frente. "Auto" segue o strafe (anda pra direita -> a
+-- hitbox vai pra esquerda, que é o lado que o adversário enxerga).
+getgenv().Desync_Lado       = "Direita"
+-- Quantos segundos entre um flush e outro. A posição mostrada ao servidor é
+-- atualizada em degraus (segura o último flush), e no disparo vai tudo de uma
+-- vez — é isso que produz o atraso, não o deslocamento lateral.
+getgenv().Desync_Sync       = 1
 
 local DesyncConn, DesyncBox, DesyncCharConn = nil, nil, nil
 local desyncLoc = nil     -- posição "real" que o cliente enxerga
 local desyncServerCF = nil -- posição que o servidor recebe (desync aplicado)
 local desyncHooked = false
 local lastLook, isSpinning = nil, false
+
+-- Posição congelada entre flushes. Enquanto o timer não vence, o servidor
+-- continua recebendo ESTA posição, não a atual.
+local desyncHeldCF = nil
+local desyncLastFlush = 0
+local desyncLastMove = nil
+local desyncStrafeSide = nil
+
+local DESYNC_DIRS = {
+    Direita = Vector3.new(1, 0, 0),
+    Esquerda = Vector3.new(-1, 0, 0),
+    Frente = Vector3.new(0, 0, -1),
+    Tras = Vector3.new(0, 0, 1),
+}
+
+-- Eixo local do deslocamento. Retorna nil quando não há offset a aplicar.
+local function Desync_GetAxis(root)
+    local side = getgenv().Desync_Lado
+    if side ~= "Auto" then
+        return DESYNC_DIRS[side] or DESYNC_DIRS.Direita
+    end
+    local vel = root.AssemblyLinearVelocity
+    local flat = Vector3.new(vel.X, 0, vel.Z)
+    if flat.Magnitude < 0.5 then
+        return DESYNC_DIRS[desyncStrafeSide or "Direita"]
+    end
+    -- ToLocalSpace tira o giro do personagem: o eixo X local é sempre o
+    -- "direita" dele, independente de pra onde ele está olhando.
+    local localVel = root.CFrame:ToObjectSpace(CFrame.new(root.Position + flat)).Position
+    local movingRight = localVel.X >= 0
+    -- Hitbox no lado oposto ao strafe, que é o que o adversário enxerga.
+    desyncStrafeSide = movingRight and "Esquerda" or "Direita"
+    return DESYNC_DIRS[desyncStrafeSide]
+end
 
 local function Desync_GetRoot()
     local char = localPlayer.Character
@@ -1380,6 +1422,11 @@ local function Desync_InstallHook()
     desyncHooked = installed
 end
 
+-- Janela em que o servidor recebe a posição deslocada. Curta de propósito:
+-- tempo demais e o personagem fica visivelmente preso, tempo de menos e o
+-- servidor nem chega a registrar o offset.
+local DESYNC_HOLD = 0.15
+
 local function Desync_Step()
     if not getgenv().Desync_Ativo then return end
     local root = Desync_GetRoot()
@@ -1395,11 +1442,41 @@ local function Desync_Step()
     lastLook = look
     if isSpinning then return end
 
+    local now = os.clock()
+    local interval = math.max(0.1, getgenv().Desync_Sync or 1)
+
     desyncLoc = root.CFrame
-    desyncServerCF = desyncLoc * CFrame.new(0, -getgenv().Desync_Forca, 0)
-    root.CFrame = desyncServerCF
-    RunService.RenderStepped:Wait()
-    root.CFrame = desyncLoc
+    if desyncHeldCF then desyncServerCF = desyncHeldCF end
+
+    -- Entre um pulso e outro nada é tocado: o client joga normal e a hitbox
+    -- continua mostrando a última posição que o servidor recebeu. O primeiro
+    -- pulso é imediato, senão ligar com sync alto deixaria o desync morto
+    -- pelo primeiro intervalo inteiro.
+    if desyncHeldCF and (now - desyncLastFlush) < interval then
+        Desync_UpdateBox()
+        return
+    end
+    desyncLastFlush = now
+
+    local axis = Desync_GetAxis(root)
+    if not axis then Desync_UpdateBox() return end
+
+    local realCF = desyncLoc
+    local offsetCF = realCF * CFrame.new(axis * getgenv().Desync_Forca)
+    desyncHeldCF = offsetCF
+    desyncServerCF = offsetCF
+
+    -- Segura o offset por DESYNC_HOLD e devolve. O pcall garante que uma
+    -- interrupção no meio do yield não deixe o root preso fora do lugar.
+    local ok = pcall(function()
+        root.CFrame = offsetCF
+        local t0 = os.clock()
+        while os.clock() - t0 < DESYNC_HOLD do
+            RunService.RenderStepped:Wait()
+        end
+        root.CFrame = realCF
+    end)
+    if not ok then pcall(function() root.CFrame = realCF end) end
 
     Desync_UpdateBox()
 end
@@ -1415,6 +1492,7 @@ local function Desync_SetActive(state)
         if not DesyncCharConn then
             DesyncCharConn = localPlayer.CharacterAdded:Connect(function()
                 lastLook, isSpinning, desyncLoc, desyncServerCF = nil, false, nil, nil
+                desyncHeldCF, desyncLastFlush, desyncLastMove, desyncStrafeSide = nil, 0, nil, nil
             end)
         end
     else
@@ -1431,6 +1509,7 @@ local function Desync_SetActive(state)
             DesyncBox = nil
         end
         lastLook, isSpinning, desyncLoc, desyncServerCF = nil, false, nil, nil
+        desyncHeldCF, desyncLastFlush, desyncLastMove, desyncStrafeSide = nil, 0, nil, nil
     end
 end
 
@@ -1442,8 +1521,17 @@ DesyncCfg:AddToggle({
     Callback = Desync_SetActive });
 
 DesyncCfg:AddSlider({
-    Flag = "Desync_Forca", Name = "Força (studs)", Min = 1, Max = 20, Default = 5, Round = 0,
+    Flag = "Desync_Forca", Name = "Distância (studs)", Min = 1, Max = 20, Default = 5, Round = 0,
     Callback = function(v) getgenv().Desync_Forca = v end });
+
+DesyncCfg:AddSlider({
+    Flag = "Desync_Sync", Name = "Sincronizar a cada (s)", Min = 0.5, Max = 5, Default = 1, Round = 1,
+    Callback = function(v) getgenv().Desync_Sync = v end });
+
+DesyncCfg:AddDropdown({
+    Flag = "Desync_Lado", Name = "Lado do Desync", Default = "Direita",
+    Values = {"Direita", "Esquerda", "Frente", "Tras", "Auto"},
+    Callback = function(v) getgenv().Desync_Lado = v end });
 
 DesyncVis:AddToggle({
     Flag = "Desync_MostrarBox", Name = "Mostrar Hitbox do Servidor", Default = false,
