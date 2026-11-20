@@ -359,6 +359,111 @@ local RunService = mkService("RunService")
 local UserInputService = mkService("UserInputService")
 local CoreGui = mkService("CoreGui")
 local HttpService = mkService("HttpService")
+
+-- JSON minimo mas real (encode/decode simetricos) para exercitar o ciclo de
+-- config: numeros, strings, booleanos, arrays e objetos aninhados.
+local function jsonEncode(v)
+    local t = type(v)
+    if t == "nil" then return "null"
+    elseif t == "boolean" then return tostring(v)
+    elseif t == "number" then return tostring(v)
+    elseif t == "string" then
+        return '"' .. v:gsub('[%c"\\]', function(c)
+            if c == '"' then return '\\"' elseif c == "\\" then return "\\\\"
+            elseif c == "\n" then return "\\n" elseif c == "\t" then return "\\t"
+            else return string.format("\\u%04x", c:byte()) end
+        end) .. '"'
+    elseif t == "table" then
+        local isArray = #v > 0
+        if isArray then
+            local parts = {}
+            for i = 1, #v do parts[i] = jsonEncode(v[i]) end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+        local keys = {}
+        for k in pairs(v) do keys[#keys + 1] = k end
+        table.sort(keys)
+        local parts = {}
+        for _, k in ipairs(keys) do
+            parts[#parts + 1] = jsonEncode(tostring(k)) .. ":" .. jsonEncode(v[k])
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+    error("jsonEncode: tipo nao suportado " .. t)
+end
+
+local function jsonDecode(str)
+    local pos = 1
+    local function skip()
+        while pos <= #str and str:sub(pos, pos):match("[%s]") do pos = pos + 1 end
+    end
+    local parseValue
+    local function parseString()
+        pos = pos + 1
+        local out = {}
+        while true do
+            local c = str:sub(pos, pos)
+            if c == "" then error("jsonDecode: string sem fim") end
+            if c == '"' then pos = pos + 1; break end
+            if c == "\\" then
+                local n = str:sub(pos + 1, pos + 1)
+                if n == "n" then out[#out+1] = "\n"; pos = pos + 2
+                elseif n == "t" then out[#out+1] = "\t"; pos = pos + 2
+                elseif n == "u" then
+                    out[#out+1] = string.char(tonumber(str:sub(pos+2, pos+5), 16) % 256)
+                    pos = pos + 6
+                else out[#out+1] = n; pos = pos + 2 end
+            else out[#out+1] = c; pos = pos + 1 end
+        end
+        return table.concat(out)
+    end
+    parseValue = function()
+        skip()
+        local c = str:sub(pos, pos)
+        if c == "{" then
+            pos = pos + 1
+            local obj = {}
+            skip()
+            if str:sub(pos, pos) == "}" then pos = pos + 1; return obj end
+            while true do
+                skip()
+                local k = parseString()
+                skip()
+                pos = pos + 1 -- ':'
+                obj[k] = parseValue()
+                skip()
+                local sep = str:sub(pos, pos); pos = pos + 1
+                if sep == "}" then return obj end
+            end
+        elseif c == "[" then
+            pos = pos + 1
+            local arr = {}
+            skip()
+            if str:sub(pos, pos) == "]" then pos = pos + 1; return arr end
+            while true do
+                arr[#arr + 1] = parseValue()
+                skip()
+                local sep = str:sub(pos, pos); pos = pos + 1
+                if sep == "]" then return arr end
+            end
+        elseif c == '"' then
+            return parseString()
+        elseif str:sub(pos, pos + 3) == "true" then pos = pos + 4; return true
+        elseif str:sub(pos, pos + 4) == "false" then pos = pos + 5; return false
+        elseif str:sub(pos, pos + 3) == "null" then pos = pos + 4; return nil
+        else
+            local num = str:match("^-?%d+%.?%d*[eE]?[-+]?%d*", pos)
+            if not num or num == "" then error("jsonDecode: valor invalido em " .. pos) end
+            pos = pos + #num
+            return tonumber(num)
+        end
+    end
+    local v = parseValue()
+    return v
+end
+
+HttpService.JSONEncode = function(_, v) return jsonEncode(v) end
+HttpService.JSONDecode = function(_, v) return jsonDecode(v) end
 local TweenService = mkService("TweenService")
 -- Create aplica o alvo na hora: o harness nao tem tempo real.
 TweenService.Create = function(_, obj, info, goal)
@@ -581,7 +686,20 @@ isfile = function(pth) return FS.files[pth] ~= nil end
 writefile = function(pth, data) FS.files[pth] = data end
 readfile = function(pth) return FS.files[pth] end
 delfile = function(pth) FS.files[pth] = nil end
-listfiles = function(pth) return {} end
+-- listfiles devolve caminhos completos, como os executores reais: a lib faz
+-- string.sub(v, #dir + 2) para extrair o nome, entao devolver so o nome
+-- quebraria GetConfigs/GetConfigCount silenciosamente.
+listfiles = function(pth)
+    local out = {}
+    local prefix = (pth == "" or pth == nil) and "" or (pth .. "/")
+    for path in pairs(FS.files) do
+        if pth == "" or pth == nil or path:sub(1, #prefix) == prefix then
+            out[#out + 1] = path
+        end
+    end
+    table.sort(out)
+    return out
+end
 getcustomasset = function(pth) return "rbxassetid://0" end
 setclipboard = function() end
 setfpscap = function() end
@@ -592,6 +710,7 @@ UserSettings = function()
     end }
 end
 gethui = gethui
+__FS = FS
 
 -- ===== task =====
 -- `wait` cede de verdade: sem isso, `while not X do task.wait() end` gira
@@ -608,4 +727,15 @@ task = {
     delay = function(_, fn, ...) return task.spawn(fn, ...) end,
     cancel = function() end,
 }
+
+-- warn existe no Roblox e no Luau padrao; a lib usa para reportar falhas nao
+-- fatais. Sem ele o mock estoura exatamente nos caminhos de erro que os testes
+-- querem exercitar.
+warn = function(...)
+    local parts = {}
+    for i = 1, select('#', ...) do parts[i] = tostring((select(i, ...))) end
+    M.__warnings = M.__warnings or {}
+    table.insert(M.__warnings, table.concat(parts, ' '))
+end
+
 return M

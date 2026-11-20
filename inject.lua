@@ -4314,7 +4314,16 @@ function FiveSync:_LoadOption(Value , TabSignal)
 		end;
 
 		function Args:GetValue()
-			return (typeof(Config.Default) == "string" and Config.Default) or Config.Default.Name;
+			-- Default pode ser nil (keybind sem tecla). Indexar nil aqui
+			-- estourava e abortava o GetConfig inteiro, entao um unico
+			-- elemento sem tecla impedia salvar qualquer config.
+			local default = Config.Default;
+
+			if typeof(default) == "string" then
+				return default;
+			end;
+
+			return default and default.Name or nil;
 		end;
 
 		if Config.Flag then
@@ -5216,7 +5225,16 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 		Args.Link = FiveSync:_LoadOption(Block);
 
 		function Args:GetValue()
-			return (typeof(Config.Default) == "string" and Config.Default) or Config.Default.Name;
+			-- Default pode ser nil (keybind sem tecla). Indexar nil aqui
+			-- estourava e abortava o GetConfig inteiro, entao um unico
+			-- elemento sem tecla impedia salvar qualquer config.
+			local default = Config.Default;
+
+			if typeof(default) == "string" then
+				return default;
+			end;
+
+			return default and default.Name or nil;
 		end;
 
 		if Config.Flag then
@@ -9061,7 +9079,12 @@ function FiveSync.new(Config : Window)
 				for i,v in next , FullConfig do
 					local Button = TabArgs:_DrawConfig();
 
-					Button:SetInfo(v.Info.Author,v.Name);
+					-- Config gravado pela lib antiga nao tem __INFORMATION, entao
+					-- Info vem nil. Sem o fallback o Refresh estourava na primeira
+					-- linha e nenhum config aparecia na lista.
+					local Info = (type(v.Info) == "table") and v.Info or {};
+
+					Button:SetInfo(Info.Author or "Desconhecido",v.Name);
 
 					table.insert(__signals,TabOpenSignal:Connect(function(v)
 						Button:Toggle(v);
@@ -9084,11 +9107,11 @@ function FiveSync.new(Config : Window)
 							Content = "Save config \""..v.Name.."\""
 						})
 
-						Button:SetInfo(v.Info.Author,v.Name);
+						Button:SetInfo(Info.Author or "Desconhecido",v.Name);
 
 						Configuration.Config:WriteConfig({
 							Name = v.Name,
-							Author = v.Info.Author;
+							Author = Info.Author or "Desconhecido";
 						});
 					end
 
@@ -10783,9 +10806,15 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 	end;
 
 	function Args:LoadConfigFromString(str: string)
-		local decoded = HttpService:JSONDecode(str);
+		local ok, decoded = pcall(function()
+			return HttpService:JSONDecode(str);
+		end);
+
+		if not ok or type(decoded) ~= "table" then return false; end;
 
 		Args:ApplyConfig(decoded);
+
+		return true;
 	end;
 
 	-- Applies a decoded config to every flagged element. Bracketed by
@@ -10804,7 +10833,9 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 		local ok, err = pcall(function()
 			FiveSync:_MuteSounds(function()
 				for i,v in next , decoded do
-					if v and v.Flag then
+					-- Config legado pode ter entrada sem Value ou com Value
+					-- nao-tabela; indexar isso derrubava o load inteiro.
+					if v and v.Flag and type(v.Value) == "table" then
 
 						local Value = Flags[v.Flag];
 
@@ -10836,8 +10867,11 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 			pcall(fn);
 		end;
 
+		-- Um elemento que recusa o valor gravado nao pode abortar o
+		-- carregamento dos outros nem derrubar o script: o config fica
+		-- parcialmente aplicado, que e melhor que perder tudo.
 		if not ok then
-			error(err, 0);
+			warn(string.format("[FiveSync] config aplicado parcialmente: %s", tostring(err)));
 		end;
 	end;
 
@@ -10845,18 +10879,22 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 		return FiveSync:GetConfig("MK")
 	end;
 
+	-- Le a informacao de um config sem confiar no conteudo: um arquivo truncado,
+	-- vazio ou gravado pela lib antiga nao pode derrubar quem chamou. O Refresh
+	-- chama isto para cada arquivo do diretorio, entao um unico arquivo ruim
+	-- levava junto a lista inteira e o script todo.
 	function Args:ReadInfo(ConfigName: string)
 		local _path = FiveSync:_Path(Args.Directory , ConfigName);
 
-		if isfile(_path) then
-			local info = readfile(_path);
+		if not isfile(_path) then return nil; end;
 
-			local decoded = HttpService:JSONDecode(info);
+		local ok, decoded = pcall(function()
+			return HttpService:JSONDecode(readfile(_path));
+		end);
 
-			return decoded.__INFORMATION;
-		end;
+		if not ok or type(decoded) ~= "table" then return nil; end;
 
-		return false;
+		return decoded.__INFORMATION;
 	end;
 
 	function Args:GetConfigs()
@@ -10910,23 +10948,39 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 	function Args:LoadConfig(ConfigName: string)
 		local _path = FiveSync:_Path(Args.Directory,ConfigName);
 
-		if isfile(_path) then
-			local info = readfile(_path);
+		if not isfile(_path) then return false; end;
 
-			local decoded = HttpService:JSONDecode(info);
+		-- Arquivo corrompido e um caso previsto, nao um erro de programacao:
+		-- decodificar sem pcall derrubava o script inteiro ao clicar em Load.
+		local ok, decoded = pcall(function()
+			return HttpService:JSONDecode(readfile(_path));
+		end);
 
-			FiveSync:_PlaySound("Config");
-
+		if not ok or type(decoded) ~= "table" then
 			if Args.EnableNotify then
 				notify.new({
 					Title = "Configs",
-					Icon = FiveSync:_GetIcon('settings'),
-					Content = "Load config \""..ConfigName.."\""
+					Icon = FiveSync:_GetIcon('alert-triangle'),
+					Content = "Config \""..ConfigName.."\" is corrupted"
 				})
 			end
 
-			Args:ApplyConfig(decoded);
-		end;
+			return false;
+		end
+
+		FiveSync:_PlaySound("Config");
+
+		if Args.EnableNotify then
+			notify.new({
+				Title = "Configs",
+				Icon = FiveSync:_GetIcon('settings'),
+				Content = "Load config \""..ConfigName.."\""
+			})
+		end
+
+		Args:ApplyConfig(decoded);
+
+		return true;
 	end;
 
 	return Args;
