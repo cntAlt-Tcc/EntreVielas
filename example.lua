@@ -82,7 +82,7 @@ local Watermark = Window:Watermark();
 
 Watermark:AddText({
 	Icon = "user",
-	Text = "4lpaca",
+	Text = "EntreViela$ Team",
 });
 
 
