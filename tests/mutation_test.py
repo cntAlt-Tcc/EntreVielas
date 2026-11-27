@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Mutation testing: cada mutacao injeta um bug real e o teste DEVE falhar."""
-import subprocess, shutil, pathlib, sys
+import subprocess, shutil, pathlib, sys, os
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / 'Script' / 'A'
@@ -13,7 +13,7 @@ MUTS = [
      'Default = "AlwaysOnTop",\n    Values = {"AlwaysOnTop", "Occluded"}',
      'Default = "Always",\n    Values = {"AlwaysOnTop", "Occluded"}'),
     ("sem fallback de nil no DepthMode",
-     'SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode]\n                or Enum.HighlightDepthMode.AlwaysOnTop)',
+     'SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode]\n                    or Enum.HighlightDepthMode.AlwaysOnTop)',
      'SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode])'),
     ("glow ignora a intensidade",
      'local layers, n = GlowLayers(intensity), count',
@@ -60,12 +60,29 @@ MUTS = [
     ("hideall nao esconde nada",
      'local function ESP_HideAll()',
      'local function ESP_HideAll() return'),
+    # --- compatibilidade com a API da lib (nome antigo / inexistente) ---
+    ("metodo FiveSync inexistente",
+     'FiveSync:SetTheme(v)', 'FiveSync:SetThemeOld(v)'),
+    ("elemento AddToggle inexistente",
+     'VisualSection:AddToggle({', 'VisualSection:AddToggleLegacy({'),
+    ("janela DrawConfig inexistente",
+     'Window:DrawConfig(', 'Window:DrawConfigOld('),
+    ("secao DrawSection inexistente",
+     'WlcT:DrawSection({', 'WlcT:DrawSectionOld({'),
+    ("AddColorPicker inexistente",
+     'QuickCfgSection:AddColorPicker({', 'QuickCfgSection:AddColorPickerX({'),
+    # --- regressoes de contrato da lib ---
+    ("campo morto volta no AddToggle",
+     '    Name = "FullBright",\n    Default = false,',
+     '    Name = "FullBright",\n    Description = "x",\n    Default = false,'),
 ]
 
 def run():
     outs = []
     tests_dir = ROOT / 'tests'
-    for driver in ['esp_test.lua', 'dropdown_test.lua']:
+    for driver in ['esp_test.lua', 'dropdown_test.lua', 'api_compat_test.lua']:
+        if not (tests_dir / driver).exists():
+            continue
         subprocess.run(['python3', str(tests_dir / 'harness.py'),
                         str(tests_dir / driver)], capture_output=True, text=True)
         r2 = subprocess.run(['/tmp/luaubin/luau', '/tmp/setup.lua'],
