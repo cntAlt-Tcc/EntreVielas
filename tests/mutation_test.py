@@ -75,12 +75,45 @@ MUTS = [
     ("campo morto volta no AddToggle",
      '    Name = "FullBright",\n    Default = false,',
      '    Name = "FullBright",\n    Description = "x",\n    Default = false,'),
+    # --- HUD: keystrokes ---
+    ("keystrokes nunca acende",
+     '        cell.Frame.BackgroundColor3 = on and KSState.Accent or Color3.fromRGB(70, 70, 70)',
+     '        cell.Frame.BackgroundColor3 = Color3.fromRGB(70, 70, 70)'),
+    ("keystrokes ignora o mouse",
+     '                    on = IsMouseDown(cell.Def.Mouse, buttons)',
+     '                    on = false'),
+    ("keystrokes acende tecla errada",
+     '                    local ok, down = pcall(function() return KSUIS:IsKeyDown(cell.Def.Key) end)',
+     '                    local ok, down = pcall(function() return KSUIS:IsKeyDown(Enum.KeyCode.A) end)'),
+    ("keystrokes nao esconde tecla desligada",
+     '            local show = KSState.Enabled[cell.Def.Id] == true',
+     '            local show = true'),
+    ("keystrokes ignora o toggle de mostrar",
+     '        panel.Parent.Enabled = KSState.Visible',
+     '        panel.Parent.Enabled = true'),
+    ("keystrokes ignora o slider de espacamento",
+     '        Keystrokes.Layout.Padding = UDim.new(0, KSState.Gap)\n',
+     ''),
+    # --- HUD: overlays ---
+    ("fps fica no placeholder",
+     '            fps = math.floor(frames / elapsed + 0.5)',
+     '            fps = fps'),
+    ("fps nao reseta a janela",
+     '            frames, elapsed = 0, 0',
+     '            frames = 0'),
+    ("overlay ignora o toggle de FPS",
+     '        if OVState.ShowFPS and OVState.ShowPing then',
+     '        if true then'),
+    # --- HUD: botoes ---
+    ("lock de posicao nao trava o arrasto",
+     '            -- Posicao travada: o botao continua clicavel, so nao sai do lugar.\n            if QuickState.LockPos then return end',
+     '            if false then return end'),
 ]
 
 def run():
     outs = []
     tests_dir = ROOT / 'tests'
-    for driver in ['esp_test.lua', 'dropdown_test.lua', 'api_compat_test.lua']:
+    for driver in ['esp_test.lua', 'dropdown_test.lua', 'api_compat_test.lua', 'hud_test.lua']:
         if not (tests_dir / driver).exists():
             continue
         subprocess.run(['python3', str(tests_dir / 'harness.py'),

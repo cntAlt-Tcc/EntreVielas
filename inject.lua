@@ -8652,6 +8652,7 @@ function FiveSync.new(Config : Window)
 			local AuthorText = Instance.new("TextLabel")
 			local DelButton = Instance.new("ImageButton")
 			local LockButton = Instance.new("ImageButton")
+			local AutoloadButton = Instance.new("ImageButton")
 			local UICorner = Instance.new("UICorner")
 			local UIGradient = Instance.new("UIGradient")
 
@@ -8689,6 +8690,25 @@ function FiveSync.new(Config : Window)
 			local LockCorner = Instance.new("UICorner")
 			LockCorner.CornerRadius = UDim.new(1, 0)
 			LockCorner.Parent = LockButton
+
+			-- Autoload vem antes do lock no layout (LayoutOrder -9997): marca qual
+			-- config e carregada no start. Icone "power" aceso quando ativo.
+			AutoloadButton.Name = FiveSync:_RandomString()
+			AutoloadButton.Parent = LinkValues
+			AutoloadButton.BackgroundTransparency = 1.000
+			AutoloadButton.BorderColor3 = Color3.fromRGB(0, 0, 0)
+			AutoloadButton.BorderSizePixel = 0
+			AutoloadButton.LayoutOrder = -9997
+			AutoloadButton.Size = UDim2.new(0, 35, 0, 15)
+			AutoloadButton.ZIndex = 14
+			AutoloadButton.Image = FiveSync:_GetIcon('power')
+			AutoloadButton.ImageColor3 = FiveSync.Colors.SwitchColor
+			AutoloadButton.ImageTransparency = 0.500
+			AutoloadButton.ScaleType = Enum.ScaleType.Fit
+
+			local AutoloadCorner = Instance.new("UICorner")
+			AutoloadCorner.CornerRadius = UDim.new(1, 0)
+			AutoloadCorner.Parent = AutoloadButton
 
 			ConfigBlock.Name = FiveSync:_RandomString()
 			ConfigBlock.Parent = ScrollingFrame
@@ -8938,6 +8958,16 @@ function FiveSync.new(Config : Window)
 					or FiveSync.Colors.SwitchColor
 			end
 
+			-- Espelha o autoload do config. Mesmo padrao do lock: um metodo para o
+			-- Refresh e o clique usarem a mesma regra.
+			function ConfigButton:SetAutoloadState(autoload)
+				ConfigButton.Autoload = autoload and true or false
+				AutoloadButton.ImageColor3 = ConfigButton.Autoload
+					and Color3.fromRGB(120, 255, 160)
+					or FiveSync.Colors.SwitchColor
+				AutoloadButton.ImageTransparency = ConfigButton.Autoload and 0 or 0.500
+			end
+
 			function ConfigButton:Toggle(v)
 				if v then
 					FiveSync:_Animation(ConfigBlock,Tween,{
@@ -9070,6 +9100,12 @@ function FiveSync.new(Config : Window)
 				end
 			end)
 
+			AutoloadButton.MouseButton1Click:Connect(function()
+				if ConfigButton.OnToggleAutoload then
+					task.spawn(ConfigButton.OnToggleAutoload);
+				end
+			end)
+
 			DelButton.MouseButton1Click:Connect(function()
 				task.spawn(ConfigButton.OnDelete);
 			end)
@@ -9078,6 +9114,7 @@ function FiveSync.new(Config : Window)
 			ConfigButton.OnSave = nil;
 			ConfigButton.OnDelete = nil;
 			ConfigButton.OnToggleLock = nil;
+			ConfigButton.OnToggleAutoload = nil;
 
 			return ConfigButton;
 		end;
@@ -9124,6 +9161,7 @@ function FiveSync.new(Config : Window)
 
 					Button:SetInfo(Info.Author or "Desconhecido",v.Name);
 					Button:SetLockedState(Configuration.Config:IsLocked(v.Name));
+					Button:SetAutoloadState(Configuration.Config:IsAutoload(v.Name));
 
 					table.insert(__signals,TabOpenSignal:Connect(function(v)
 						Button:Toggle(v);
@@ -9200,6 +9238,25 @@ function FiveSync.new(Config : Window)
 							Icon = FiveSync:_GetIcon(locked and 'lock' or 'unlock'),
 							Content = string.format("Config \"%s\" %s",
 								v.Name, locked and "locked" or "unlocked")
+						})
+					end
+
+					Button.OnToggleAutoload = function()
+						local autoload = not Configuration.Config:IsAutoload(v.Name);
+
+						if not Configuration.Config:SetAutoloadExclusive(v.Name, autoload) then
+							return;
+						end
+
+						-- Exclusivo: o Refresh redesenha a lista inteira, entao os outros
+						-- botoes perdem o destaque sem precisar de estado local.
+						Refresh();
+
+						WindowArgs.Notify.new({
+							Title = "Configs",
+							Icon = FiveSync:_GetIcon('power'),
+							Content = string.format("Config \"%s\" %s",
+								v.Name, autoload and "vai carregar no start" or "nao carrega mais no start")
 						})
 					end
 				end;
@@ -11019,6 +11076,57 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 		writefile(_path , HttpService:JSONEncode(decoded));
 
 		return true;
+	end;
+
+	-- Autoload: marca no proprio arquivo qual config e carregada no start.
+	-- Fica no __INFORMATION pelo mesmo motivo do Locked -- viaja com o arquivo
+	-- em vez de um sidecar que pode sair de sincronia.
+	function Args:IsAutoload(ConfigName: string)
+		local info = Args:ReadInfo(ConfigName);
+
+		return (info and info.Autoload == true) or false;
+	end;
+
+	function Args:SetAutoload(ConfigName: string, autoload: boolean)
+		local _path = FiveSync:_Path(Args.Directory , ConfigName);
+
+		if not isfile(_path) then return false; end;
+
+		local ok, decoded = pcall(function()
+			return HttpService:JSONDecode(readfile(_path));
+		end);
+
+		if not ok or type(decoded) ~= "table" then return false; end;
+
+		decoded.__INFORMATION = decoded.__INFORMATION or {};
+		decoded.__INFORMATION.Autoload = autoload and true or nil;
+
+		writefile(_path , HttpService:JSONEncode(decoded));
+
+		return true;
+	end;
+
+	-- So um config carrega no start: marcar um desmarca os outros. Sem isso dois
+	-- autoloads disputariam os mesmos Flags na inicializacao e o resultado
+	-- dependeria da ordem de listagem do diretorio.
+	function Args:GetAutoloadConfig()
+		for _, name in ipairs(Args:GetConfigs()) do
+			if Args:IsAutoload(name) then return name; end;
+		end;
+
+		return nil;
+	end;
+
+	function Args:SetAutoloadExclusive(ConfigName: string, autoload: boolean)
+		if autoload then
+			for _, name in ipairs(Args:GetConfigs()) do
+				if name ~= ConfigName and Args:IsAutoload(name) then
+					Args:SetAutoload(name, false);
+				end;
+			end;
+		end;
+
+		return Args:SetAutoload(ConfigName, autoload);
 	end;
 
 	function Args:GetConfigs()
