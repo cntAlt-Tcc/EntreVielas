@@ -38,11 +38,12 @@ local LIB = __FIVESYNC
 __ok("hud: lib exposta", type(LIB) == "table")
 
 -- 1. As tres abas moram no container Gui, dentro de Vsync Menu V1: nao
--- existe categoria HUD separada.
+-- existe categoria HUD separada. Gui e um container (item de sidebar com
+-- barra de abas); TabArgs nao expoe DrawTab, so ContainerTabArgs.
 __ok("hud: aba Botões presente", hasText(" Botões "))
 __ok("hud: aba Keystrokes presente", hasText(" Keystrokes "))
 __ok("hud: aba Overlays presente", hasText(" Overlays "))
-__ok("hud: container Gui presente", hasText("| Gui"))
+__ok("hud: container Gui presente", hasText("Gui"))
 __ok("hud: categoria HUD removida", not hasText("HUD"))
 
 local KS = getgenv().Vsync_Keystrokes

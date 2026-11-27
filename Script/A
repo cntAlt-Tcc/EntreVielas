@@ -3986,7 +3986,7 @@ local VisualContainer = Window:DrawContainerTab({
 -- Elementos de jogo (Botões, Keystrokes, Overlays) desenham por cima da cena,
 -- entao moram num container proprio em vez de se misturar com ajustes visuais.
 local GuiContainer = Window:DrawContainerTab({
-	Name = "| Gui",
+	Name = "Gui",
 	Icon = "layout-dashboard",
 });
 
