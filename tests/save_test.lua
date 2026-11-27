@@ -44,3 +44,39 @@ __ok("load: Box.Enabled restaurado", C.Box.Enabled == true, tostring(C.Box.Enabl
 CM:DeleteConfig("TesteCiclo")
 __ok("delete: arquivo removido", FS.files[path] == nil)
 __ok("delete: some de GetConfigs", table.find(CM:GetConfigs(), "TesteCiclo") == nil)
+
+-- 4. Autoload: marca no proprio arquivo, exclusivo entre configs.
+CM:WriteConfig({ Name = "AutoA" })
+CM:WriteConfig({ Name = "AutoB" })
+
+__ok("autoload: nasce desligado", CM:IsAutoload("AutoA") == false)
+__ok("autoload: nenhum marcado no inicio", CM:GetAutoloadConfig() == nil,
+     tostring(CM:GetAutoloadConfig()))
+
+__ok("autoload: SetAutoload grava", CM:SetAutoloadExclusive("AutoA", true) == true)
+__ok("autoload: AutoA marcado", CM:IsAutoload("AutoA") == true)
+__ok("autoload: GetAutoloadConfig devolve AutoA", CM:GetAutoloadConfig() == "AutoA",
+     tostring(CM:GetAutoloadConfig()))
+
+-- Marcar outro tem que desmarcar o primeiro: dois autoloads disputariam os
+-- mesmos Flags na inicializacao.
+CM:SetAutoloadExclusive("AutoB", true)
+__ok("autoload: exclusivo desmarca AutoA", CM:IsAutoload("AutoA") == false)
+__ok("autoload: exclusivo marca AutoB", CM:IsAutoload("AutoB") == true)
+__ok("autoload: so um marcado", CM:GetAutoloadConfig() == "AutoB",
+     tostring(CM:GetAutoloadConfig()))
+
+-- O autoload vive no __INFORMATION, junto do lock: nao pode derrubar o lock.
+CM:SetLocked("AutoB", true)
+CM:SetAutoloadExclusive("AutoB", true)
+__ok("autoload: lock sobrevive ao autoload", CM:IsLocked("AutoB") == true)
+__ok("autoload: autoload sobrevive ao lock", CM:IsAutoload("AutoB") == true)
+
+-- Desmarcar volta a nao carregar nada.
+CM:SetAutoloadExclusive("AutoB", false)
+__ok("autoload: desmarcado", CM:IsAutoload("AutoB") == false)
+__ok("autoload: nenhum marcado no fim", CM:GetAutoloadConfig() == nil)
+
+-- Config inexistente nao pode explodir.
+__ok("autoload: config inexistente devolve false", CM:SetAutoload("NaoExiste", true) == false)
+__ok("autoload: IsAutoload de inexistente e false", CM:IsAutoload("NaoExiste") == false)

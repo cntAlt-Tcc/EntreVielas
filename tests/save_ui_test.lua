@@ -126,3 +126,35 @@ if row then
              table.concat(notifTexts(), " | "))
     end
 end
+
+-- Autoload: botao proprio na linha do config, ao lado do lock.
+local powerIcon = L:CacheImage(L.Lucide["lucide-power"])
+__ok("ui: icone power resolvido", type(powerIcon) == "string" and #powerIcon > 0, tostring(powerIcon))
+
+local function findAutoloadBtn()
+    for _, b in ipairs(findAll("ImageButton")) do
+        if b.Image == powerIcon then return b end
+    end
+end
+
+local autoBtn = findAutoloadBtn()
+__ok("ui: botao de autoload existe na linha", autoBtn ~= nil)
+__ok("ui: autoload comeca apagado", autoBtn and (autoBtn.ImageTransparency or 0) > 0,
+     autoBtn and tostring(autoBtn.ImageTransparency))
+
+if autoBtn then
+    __M.__fire(autoBtn, "MouseButton1Click")
+    __M.__drain()
+    __ok("ui: clique marca autoload", CM:IsAutoload("Antigo") == true)
+    __ok("ui: GetAutoloadConfig devolve Antigo", CM:GetAutoloadConfig() == "Antigo",
+         tostring(CM:GetAutoloadConfig()))
+
+    -- Exclusivo: marcar outro tem que desmarcar o primeiro.
+    CM:SetAutoloadExclusive("Outro", true)
+    __M.__drain(80)
+    __ok("ui: exclusivo desmarca Antigo", CM:IsAutoload("Antigo") == false)
+    __ok("ui: exclusivo marca Outro", CM:IsAutoload("Outro") == true)
+
+    -- Limpa para nao interferir nas assercoes seguintes.
+    CM:SetAutoloadExclusive("Outro", false)
+end

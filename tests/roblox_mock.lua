@@ -123,9 +123,19 @@ local Enum = setmetatable({}, { __index = function(t, k)
         rawset(t, k, e)
         return e
     end
+    -- No Roblox cada membro de Enum e um singleton: duas leituras de
+    -- Enum.UserInputType.MouseButton1 devolvem a MESMA tabela. Criar uma nova
+    -- a cada acesso quebra qualquer comparacao por igualdade, que e como o
+    -- codigo real identifica o tipo de input.
+    local cache = {}
     local e = setmetatable({}, { __index = function(_, kk)
         M.__enumKeys[k .. "." .. tostring(kk)] = true
-        return { Name = kk, Value = 0, EnumType = k }
+        local item = cache[kk]
+        if not item then
+            item = { Name = kk, Value = 0, EnumType = k }
+            cache[kk] = item
+        end
+        return item
     end })
     rawset(t, k, e)
     return e
@@ -492,6 +502,16 @@ RunService.Stepped = {
 
 -- conexões: guarda o callback para o teste chamar manualmente
 M.connections = {}
+-- Dispara as conexoes de um loop do RunService. Sem isso um teste de FPS nao
+-- tem como avancar o tempo: RenderStepped nao passa por __drain.
+M.__step = function(name, dt)
+    for _, c in ipairs(M.connections) do
+        if c.name == name then
+            local ok, err = pcall(c.fn, dt)
+            if not ok then print("ERRO " .. name .. ": " .. tostring(err)) end
+        end
+    end
+end
 RunService.RenderStepped = {
     Connect = function(_, fn)
         table.insert(M.connections, { name = "RenderStepped", fn = fn })
@@ -648,12 +668,25 @@ Players.GetPlayerByUserId = function() return nil end
 Players.GetNameFromUserIdAsync = function() return "user" end
 local UIS = services["UserInputService"]
 UIS.GetMouseLocation = function() return Vector2.new(960, 540) end
-UIS.IsKeyDown = function() return false end
+-- Estado de input controlavel pelo teste: o painel Keystrokes le daqui.
+M.__keysDown = {}
+M.__mouseDown = {}
+UIS.IsKeyDown = function(_, key)
+    local name = (type(key) == "table" and key.Name) or tostring(key)
+    return M.__keysDown[name] == true
+end
+UIS.GetMouseButtonsPressed = function()
+    local out = {}
+    for _, idx in ipairs(M.__mouseDown) do
+        out[#out + 1] = { UserInputType = (idx == 1) and Enum.UserInputType.MouseButton1
+                                                   or Enum.UserInputType.MouseButton2 }
+    end
+    return out
+end
 UIS.GetFocusedTextBox = function() return nil end
-UIS.InputBegan = { Connect = function() return { Disconnect = function() end } end }
-UIS.InputEnded = { Connect = function() return { Disconnect = function() end } end }
-UIS.InputChanged = { Connect = function() return { Disconnect = function() end } end }
-UIS.TouchTap = { Connect = function() return { Disconnect = function() end } end }
+-- InputBegan/InputEnded/InputChanged/TouchTap NAO sao sobrescritos: o __index
+-- de instancia ja devolve sinais registraveis (mkSignal), e um stub que
+-- descarta o handler faz o teste passar sem exercitar o codigo de verdade.
 M.mouse = __mouse
 
 M.services = services

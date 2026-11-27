@@ -1,79 +1,105 @@
 -- Silent Aim: opcao "fire function check".
 --
--- O gate antigo usava debug.traceback(), que inclui o frame da propria
--- SA_IsFireFunc -- e o nome dela contem "fire". O gate casava consigo mesmo,
--- liberava TODA chamada e a opcao nunca filtrava nada.
+-- Historico do bug, em duas camadas:
+--  1. o gate usava debug.traceback(), que inclui o frame da propria
+--     SA_IsFireFunc -- nome com "fire" -- e casava consigo mesmo, liberando
+--     TODA chamada. O gate nunca filtrava nada.
+--  2. corrigido isso, o gate passou a olhar so o NOME do frame. Callback de
+--     arma no Roblox e anonimo (nome ""), entao TODO tiro era bloqueado -- o
+--     filtro matava a propria arma. O sinal que existe de verdade e o script
+--     chamador (getcallingscript) e o SOURCE do frame, nao o nome.
 --
--- O jogo real chama o hook de outro chunk. Aqui loadstring() faz esse papel:
--- sem isso tudo roda no mesmo chunk do Script/A e o filtro de fonte propria
+-- O jogo chama o hook de outro chunk. Aqui loadstring() faz esse papel: sem
+-- isso tudo roda no mesmo chunk do Script/A e o filtro de fonte propria
 -- pularia todos os frames, mascarando o bug.
 local SA = __M.SA
 local GENV = getgenv()
 
 __ok("SA exposto no getgenv", type(SA) == "table" and type(SA.IsFireFunc) == "function")
 
-local function gameChunk(src)
-    local fn = assert(loadstring(src, "@game"))
+local function gameChunk(src, chunkname)
+    local fn = assert(loadstring(src, chunkname or "@game"))
     return fn(SA)
 end
 
-local plainCall  = gameChunk("local SA = ... return function() return SA.IsFireFunc() end")
-local fireCall   = gameChunk("local SA = ... return function() return SA.IsFireFunc() end")
-local fireBullet = gameChunk([[
-    local SA = ...
-    local function FireBullet() return SA.IsFireFunc() end
-    return FireBullet
-]])
 local updateInv = gameChunk([[
     local SA = ...
     local function UpdateInventory() return SA.IsFireFunc() end
     return UpdateInventory
 ]])
 
--- 1. Gate desligado (default): qualquer chamada passa -- inclusive uma sem
---    nenhuma palavra-chave de arma. Usar uma chamada armada aqui deixaria o
---    teste passar mesmo sem o shortcircuit.
+-- 1. Gate desligado (default): qualquer chamada passa.
 GENV.SilentAim_FireFunc = false
 __ok("gate off libera chamada comum", updateInv() == true)
 
--- 2. Gate ligado: chamada comum e bloqueada...
+-- 2. Gate ligado + frame nomeado sem cara de arma -> bloqueia.
+--    Sem getcallingscript no ambiente, o nome do frame e a unica evidencia.
 GENV.SilentAim_FireFunc = true
-__ok("gate on bloqueia chamada comum", updateInv() == false)
+__ok("gate on bloqueia chamada comum nomeada", updateInv() == false)
 
--- 3. ...e o tiro continua passando.
-__ok("gate on libera funcao de tiro", fireBullet() == true)
+-- 3. Funcao nomeada de arma -> libera.
+local fireNamed = gameChunk([[
+    local SA = ...
+    local function FireBullet() return SA.IsFireFunc() end
+    return FireBullet
+]])
+__ok("gate on libera funcao nomeada de tiro", fireNamed() == true)
 
--- 4. Funcao anonima (sem nome armado) tambem e bloqueada: o gate olha o
---    nome do frame, nao o conteudo.
-__ok("gate on bloqueia funcao anonima", plainCall() == false)
+-- 4. O BUG REAL: callback anonimo dentro de um script de arma. O nome do frame
+--    e "", mas o SOURCE aponta para o script da arma. Antes do fix isso era
+--    bloqueado (todo tiro real morria).
+local anonGun = gameChunk([[
+    local SA = ...
+    return function() return SA.IsFireFunc() end
+]], "@/game/Workspace/Gun/Script")
+__ok("arma com callback anonimo passa (bug do bloqueio total)", anonGun() == true)
+
+local anonWeaponClient = gameChunk([[
+    local SA = ...
+    return function() return SA.IsFireFunc() end
+]], "@/game/StarterPlayer/WeaponClient")
+__ok("WeaponClient anonimo passa", anonWeaponClient() == true)
 
 -- 5. Fail-open: executor que nao expoe frames do jogo nao pode bloquear tiro.
---    O gate precisa estar LIGADO aqui: desligado, o shortcircuit retorna antes
---    de olhar a pilha e o teste passaria sem exercitar o fail-open.
 GENV.SilentAim_FireFunc = true
 local realInfo = debug.info
 debug.info = function() return nil end
 __ok("pilha sem frames do jogo -> fail-open", updateInv() == true)
 debug.info = realInfo
 __ok("debug restaurado", debug.info == realInfo)
-GENV.SilentAim_FireFunc = false
 
--- 6. Frame nativo ([C]) com nome armado nao pode ser confundido com frame do
---    jogo: o proprio hook roda em [C] via newcclosure. Se [C] fosse inspecionado,
---    "FireBullet" liberaria uma chamada comum. Aqui a pilha e simulada porque o
---    Luau nao produz [C] com nome custom.
-GENV.SilentAim_FireFunc = true
-local stackInfo = debug.info
-debug.info = function(level)
-    if level == 1 then return "[C]", "FireBullet" end
-    if level == 2 then return "/game/Inventory.lua", "UpdateInventory" end
-    return nil
+-- 6. getcallingscript: quando o executor expoe, o script chamador decide --
+--    e um script DENTRO de um Tool conta como arma mesmo sem palavra-chave
+--    no nome (AK47, Sword...).
+local function fakeScript(name, parent)
+    return { Name = name, Parent = parent,
+             GetFullName = function() return name end }
 end
-__ok("[C] armado nao mascara frame do jogo", updateInv() == false)
-debug.info = stackInfo
+local realGet = getcallingscript
+
+-- 6a. script comum, fora de Tool -> bloqueia
+getcallingscript = function() return fakeScript("InventoryHandler", nil) end
+__ok("getcallingscript comum -> bloqueia", updateInv() == false)
+
+-- 6b. script dentro de Tool, nome sem palavra-chave -> libera
+local tool = { Name = "AK47", Parent = nil, ClassName = "Tool" }
+getcallingscript = function() return fakeScript("LocalScript", tool) end
+__ok("getcallingscript dentro de Tool -> libera", updateInv() == true)
+
+-- 6c. script com nome de arma -> libera
+getcallingscript = function() return fakeScript("GunClient", nil) end
+__ok("getcallingscript com nome de arma -> libera", updateInv() == true)
+
+getcallingscript = realGet
 GENV.SilentAim_FireFunc = false
 
--- 7. Lista de palavras-chave continua a esperada.
+-- 7. O gate nao pode casar consigo mesmo: o nome SA_IsFireFunc tem "fire".
+--    Se casasse, liberaria tudo e o filtro seria decorativo.
+__ok("FrameMatchesFire ignora nome vazio", SA.FrameMatchesFire("@game", "") == false)
+__ok("FrameMatchesFire pega nome de arma", SA.FrameMatchesFire("@game", "FireBullet") == true)
+__ok("FrameMatchesFire pega source de arma", SA.FrameMatchesFire("@/game/Gun/Script", "") == true)
+
+-- 8. Lista de palavras-chave continua a esperada.
 local kws = {}
 for _, k in ipairs(SA.FireKeywords) do kws[k] = true end
 __ok("keyword 'fire' presente", kws.fire == true)
