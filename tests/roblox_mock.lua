@@ -170,9 +170,36 @@ local function mkSignal(owner, name)
         Once = function(_, fn) table.insert(rec.fns, fn) return { Disconnect = function() end } end,
     }
 end
+-- No Roblox, disparar InputBegan/InputEnded e o mesmo evento que faz
+-- IsKeyDown responder true/false. Manter os dois dessincronizados no mock
+-- faz o codigo de poll "soltar" uma tecla que acabou de ser pressionada e o
+-- teste acusa um bug que nao existe.
+local function syncInputState(name, input)
+    if type(input) ~= "table" then return end
+    -- No Roblox, todo InputObject carrega KeyCode, mesmo em eventos de mouse
+    -- (Unknown). A lib le Input.KeyCode.Name sem checar, entao sem isso o
+    -- handler dela estoura em todo clique.
+    if input.KeyCode == nil then
+        input.KeyCode = Enum.KeyCode.Unknown
+    end
+    local isBegan = (name == "InputBegan")
+    local isEnded = (name == "InputEnded")
+    if not (isBegan or isEnded) then return end
+
+    local t = input.UserInputType
+    if t == Enum.UserInputType.Keyboard and input.KeyCode then
+        M.__keysDown[input.KeyCode.Name] = isBegan or nil
+    elseif t == Enum.UserInputType.MouseButton1 then
+        M.__mouseDown[1] = isBegan or nil
+    elseif t == Enum.UserInputType.MouseButton2 then
+        M.__mouseDown[2] = isBegan or nil
+    end
+end
+
 M.__fire = function(owner, name, ...)
     local key = tostring(owner) .. ":" .. name
     local rec = M.__signals[key]
+    syncInputState(name, ...)
     if not rec then return 0 end
     for _, fn in ipairs(rec.fns) do
         local ok, err = pcall(fn, ...)
@@ -227,6 +254,14 @@ instMeta.__newindex = function(self, k, v)
 end
 instMeta.methods = {}
 local methods = instMeta.methods
+
+-- Sound: o painel de keystrokes toca um som por tecla. Sem Play/Stop no mock
+-- o pcall engoliria a chamada e o teste passaria sem nunca exercitar o som.
+M.__soundsPlayed = {}
+function methods:Play()
+    M.__soundsPlayed[#M.__soundsPlayed + 1] = self
+end
+function methods:Stop() end
 
 function methods:FindFirstChild(name)
     for _, c in ipairs(rawget(self, "_children")) do if c.Name == name then return c end end
@@ -303,8 +338,20 @@ function methods:Destroy() rawget(self, "_props").Parent = nil end
 function methods:ClearAllChildren() rawset(self, "_children", {}) end
 function methods:GetAttribute() return nil end
 function methods:SetAttribute() end
-function methods:GetPropertyChangedSignal()
-    return { Connect = function() return { Disconnect = function() end } end }
+-- Registrar de verdade: um Connect que descarta o handler faz o teste passar
+-- sem exercitar nada (foi assim que o arrasto do HUD passou sem funcionar).
+-- O nome do sinal inclui a propriedade para o teste disparar so o que quer.
+function methods:GetPropertyChangedSignal(prop)
+    local self_ = self
+    return {
+        Connect = function(_, fn)
+            local key = tostring(self_) .. ":" .. tostring(prop)
+            local rec = M.__signals[key]
+            if not rec then rec = { owner = self_, name = prop, fns = {} } M.__signals[key] = rec end
+            table.insert(rec.fns, fn)
+            return { Disconnect = function() end }
+        end,
+    }
 end
 
 function Instance.new(cls, parent)
