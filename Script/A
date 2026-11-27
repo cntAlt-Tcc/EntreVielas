@@ -5865,7 +5865,7 @@ local ButtonTab = VisualContainer:DrawTab({
     EnableScrolling = true,
 });
 
-do
+(function()
     local HttpService = game:GetService("HttpService")
     local QuickUIS = game:GetService("UserInputService")
     local QuickCoreGui = (gethui and gethui()) or game:GetService("CoreGui")
@@ -6234,7 +6234,7 @@ do
 
     -- Exposto para depuração/uso externo.
     getgenv().Vsync_QuickButtons = QuickButtons
-end
+end)()
 
 
 
@@ -6251,7 +6251,7 @@ local KeystrokesTab = VisualContainer:DrawTab({
     EnableScrolling = true,
 });
 
-do
+(function()
     local KSUIS = game:GetService("UserInputService")
     local KSTween = game:GetService("TweenService")
     local KSSound = game:GetService("SoundService")
@@ -6963,7 +6963,7 @@ do
     })
 
     getgenv().Vsync_Keystrokes = Keystrokes
-end
+end)()
 
 
 
@@ -6978,7 +6978,7 @@ local OverlaysTab = VisualContainer:DrawTab({
     EnableScrolling = true,
 });
 
-do
+(function()
     local OVRun = game:GetService("RunService")
     local OVHttp = game:GetService("HttpService")
     local OVUIS = game:GetService("UserInputService")
@@ -7232,7 +7232,7 @@ do
     })
 
     getgenv().Vsync_Overlays = Overlays
-end
+end)()
 
 
 -- ==============================================================
