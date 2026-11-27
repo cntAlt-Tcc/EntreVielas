@@ -5854,17 +5854,12 @@ MotionBlurSection:AddSlider({
 -- ajustes visuais da cena, e por isso saíram da aba Visual.
 -- ==============================================================
 Window:DrawCategory({ Name = "HUD" })
-local HUDContainer = Window:DrawContainerTab({
-    Name = "| HUD",
-    Icon = "layout-dashboard",
-});
-
 -- ==============================================================
 -- Aba "Botões": HUD de botões on-screen para ligar/desligar funções.
 -- Cada botão espelha o estado de um Flag do menu; clicar alterna o Flag.
 -- Layout (visibilidade + posição) é salvo em disco e recarregado no start.
 -- ==============================================================
-local ButtonTab = HUDContainer:DrawTab({
+local ButtonTab = VisualContainer:DrawTab({
     Name = " Botões ",
     Type = "Single",
     EnableScrolling = true,
@@ -6241,370 +6236,781 @@ do
     getgenv().Vsync_QuickButtons = QuickButtons
 end
 
+
+
 -- ==============================================================
--- Aba "Keystrokes": teclas e botões do mouse pressionados na tela.
--- Lê o estado direto do UserInputService em vez de escutar eventos: um
--- InputEnded perdido (janela do jogo perdendo foco no meio do clique)
--- deixaria a tecla acesa para sempre.
+-- Aba "Keystrokes": painel de teclas e mouse na tela.
+-- Layout completo de teclado (numeros, QWERT, ASDFG, ZXCV, CTRL/ALT/
+-- SPACE) mais um mouse desenhado a parte, com som a cada tecla.
+-- Estado vem de InputBegan/InputEnded, que e o que permite tocar o som
+-- no instante do aperto; o poll e so rede de seguranca.
 -- ==============================================================
-local KeystrokesTab = HUDContainer:DrawTab({
+local KeystrokesTab = VisualContainer:DrawTab({
     Name = " Keystrokes ",
     Type = "Single",
     EnableScrolling = true,
 });
 
 do
-    local HttpService = game:GetService("HttpService")
     local KSUIS = game:GetService("UserInputService")
+    local KSTween = game:GetService("TweenService")
+    local KSSound = game:GetService("SoundService")
+    local KSHttp = game:GetService("HttpService")
     local KSCoreGui = (gethui and gethui()) or game:GetService("CoreGui")
     local KS_PATH = "Vsync/Keystrokes.json"
 
-    -- Ordem aqui e a ordem na tela. Mouse usa indice de botao (1 = esquerdo).
-    local KS_KEYS = {
-        { Id = "W",     Key = Enum.KeyCode.W,            Label = "W" },
-        { Id = "A",     Key = Enum.KeyCode.A,            Label = "A" },
-        { Id = "S",     Key = Enum.KeyCode.S,            Label = "S" },
-        { Id = "D",     Key = Enum.KeyCode.D,            Label = "D" },
-        { Id = "Space", Key = Enum.KeyCode.Space,        Label = "SPACE" },
-        { Id = "Shift", Key = Enum.KeyCode.LeftShift,    Label = "SHIFT" },
-        { Id = "Ctrl",  Key = Enum.KeyCode.LeftControl,  Label = "CTRL" },
-        { Id = "LMB",   Mouse = 1,                       Label = "LMB" },
-        { Id = "RMB",   Mouse = 2,                       Label = "RMB" },
+    -- Sons do exemplo: seis variacoes de tecla, sorteadas sem repetir a
+    -- anterior, e um som fixo para o mouse.
+    local KS_KEY_SOUNDS = {
+        "9113876460", "107671005026175", "92203640245349",
+        "92372780631216", "79419912895902", "140724395390395",
     }
+    local KS_MOUSE_SOUND = "9120232166"
 
     local KSState = {
-        Size = 44,
-        Gap = 4,
-        Transparency = 0.35,
-        Accent = Color3.fromRGB(255, 255, 255),
+        Enabled = true,
+        ShowMouse = true,
+        Layout = "FULL",
+        Anchor = "BottomLeft",
+        Scale = 1,
+        Volume = 0.7,
         LockPos = false,
-        Visible = true,
-        Enabled = {},
+        KeyColor = Color3.fromRGB(25, 25, 31),
+        KeyPressedColor = Color3.fromRGB(35, 85, 155),
+        MouseColor = Color3.fromRGB(245, 45, 165),
+        MousePressedColor = Color3.fromRGB(255, 125, 210),
+        AccentColor = Color3.fromRGB(65, 155, 255),
+        TextColor = Color3.fromRGB(245, 245, 250),
     }
 
-    for _, k in ipairs(KS_KEYS) do KSState.Enabled[k.Id] = true end
+    local KS_BASE_W, KS_BASE_H = 340, 133
+    local KS_ANIM = 0.08
 
-    local Keystrokes = { Panel = nil, Cells = {} }
+    local Keystrokes = {
+        Gui = nil,
+        Root = nil,
+        Keys = {},
+        Mouse = {},
+        Sounds = {},
+        Connections = {},
+        LastSound = 0,
+        WheelToken = 0,
+    }
 
     local function SaveKS()
+        local function rgb(c) return { c.R, c.G, c.B } end
         local out = { State = {
-            Size = KSState.Size,
-            Gap = KSState.Gap,
-            Transparency = KSState.Transparency,
-            LockPos = KSState.LockPos,
-            Visible = KSState.Visible,
-            Accent = { R = KSState.Accent.R, G = KSState.Accent.G, B = KSState.Accent.B },
             Enabled = KSState.Enabled,
-            Pos = Keystrokes.Panel and {
-                Keystrokes.Panel.Position.X.Scale, Keystrokes.Panel.Position.X.Offset,
-                Keystrokes.Panel.Position.Y.Scale, Keystrokes.Panel.Position.Y.Offset,
+            ShowMouse = KSState.ShowMouse,
+            Layout = KSState.Layout,
+            Anchor = KSState.Anchor,
+            Scale = KSState.Scale,
+            Volume = KSState.Volume,
+            LockPos = KSState.LockPos,
+            KeyColor = rgb(KSState.KeyColor),
+            KeyPressedColor = rgb(KSState.KeyPressedColor),
+            MouseColor = rgb(KSState.MouseColor),
+            MousePressedColor = rgb(KSState.MousePressedColor),
+            AccentColor = rgb(KSState.AccentColor),
+            TextColor = rgb(KSState.TextColor),
+            Pos = Keystrokes.Root and {
+                Keystrokes.Root.Position.X.Scale, Keystrokes.Root.Position.X.Offset,
+                Keystrokes.Root.Position.Y.Scale, Keystrokes.Root.Position.Y.Offset,
             } or nil,
         } }
         pcall(function()
             if not isfolder("Vsync") then makefolder("Vsync") end
-            writefile(KS_PATH, HttpService:JSONEncode(out))
+            writefile(KS_PATH, KSHttp:JSONEncode(out))
         end)
     end
 
     local function LoadKS()
         local ok, data = pcall(function()
-            if isfile(KS_PATH) then return HttpService:JSONDecode(readfile(KS_PATH)) end
+            if isfile(KS_PATH) then return KSHttp:JSONDecode(readfile(KS_PATH)) end
             return nil
         end)
         if not (ok and type(data) == "table" and type(data.State) == "table") then return end
 
         local st = data.State
-        KSState.Size = st.Size or KSState.Size
-        KSState.Gap = st.Gap or KSState.Gap
-        KSState.Transparency = st.Transparency or KSState.Transparency
+        if st.Enabled ~= nil then KSState.Enabled = st.Enabled end
+        if st.ShowMouse ~= nil then KSState.ShowMouse = st.ShowMouse end
+        if st.Layout then KSState.Layout = st.Layout end
+        if st.Anchor then KSState.Anchor = st.Anchor end
+        KSState.Scale = st.Scale or KSState.Scale
+        KSState.Volume = st.Volume or KSState.Volume
         if st.LockPos ~= nil then KSState.LockPos = st.LockPos end
-        if st.Visible ~= nil then KSState.Visible = st.Visible end
-        if st.Accent then KSState.Accent = Color3.new(st.Accent.R, st.Accent.G, st.Accent.B) end
-        if type(st.Enabled) == "table" then
-            for id, v in pairs(st.Enabled) do KSState.Enabled[id] = v == true end
+
+        local function color(t, fallback)
+            if type(t) == "table" then return Color3.new(t[1] or 0, t[2] or 0, t[3] or 0) end
+            return fallback
         end
+        KSState.KeyColor = color(st.KeyColor, KSState.KeyColor)
+        KSState.KeyPressedColor = color(st.KeyPressedColor, KSState.KeyPressedColor)
+        KSState.MouseColor = color(st.MouseColor, KSState.MouseColor)
+        KSState.MousePressedColor = color(st.MousePressedColor, KSState.MousePressedColor)
+        KSState.AccentColor = color(st.AccentColor, KSState.AccentColor)
+        KSState.TextColor = color(st.TextColor, KSState.TextColor)
         return st.Pos
     end
 
-    -- O painel e um frame solto no canto; o drag move este frame e as celulas
-    -- ficam em linha dentro dele.
-    local function EnsurePanel()
-        if Keystrokes.Panel and Keystrokes.Panel.Parent then return Keystrokes.Panel end
-
-        local gui = Instance.new("ScreenGui")
-        gui.Name = "Vsync_Keystrokes"
-        gui.ResetOnSpawn = false
-        gui.IgnoreGuiInset = true
-        gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        gui.DisplayOrder = 9998
-        gui.Parent = KSCoreGui
-
-        local panel = Instance.new("Frame")
-        panel.Name = "Panel"
-        panel.BackgroundTransparency = 1
-        panel.BorderSizePixel = 0
-        panel.Parent = gui
-
-        local layout = Instance.new("UIListLayout")
-        layout.FillDirection = Enum.FillDirection.Horizontal
-        layout.SortOrder = Enum.SortOrder.LayoutOrder
-        layout.VerticalAlignment = Enum.VerticalAlignment.Top
-        layout.Padding = UDim.new(0, KSState.Gap)
-        layout.Parent = panel
-
-        Keystrokes.Layout = layout
-        Keystrokes.Panel = panel
-        return panel
+    local function Make(className, props, parent)
+        local o = Instance.new(className)
+        for k, v in pairs(props) do o[k] = v end
+        o.Parent = parent
+        return o
     end
 
-    -- Repintar custa cinco escritas por tecla e o poll roda a 30 Hz. Quase
-    -- sempre nada muda, entao cada celula guarda o que esta pintado.
-    local function PaintCell(cell, on)
-        if cell.Painted == on then return end
-        cell.Painted = on
-        cell.Frame.BackgroundColor3 = on and KSState.Accent or Color3.fromRGB(70, 70, 70)
-        cell.Frame.BackgroundTransparency = on and 0.05 or KSState.Transparency
-        cell.Stroke.Color = on and KSState.Accent or Color3.fromRGB(90, 90, 90)
-        cell.Stroke.Transparency = on and 0 or 0.5
-        cell.Label.TextColor3 = on and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(230, 230, 230)
+    local function Tween(obj, props)
+        local ok = pcall(function()
+            KSTween:Create(obj, TweenInfo.new(KS_ANIM, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props):Play()
+        end)
+        if not ok then
+            for k, v in pairs(props) do pcall(function() obj[k] = v end) end
+        end
     end
 
-    local function ApplyKSStyle()
-        local panel = Keystrokes.Panel
-        if not panel then return end
+    local function Connect(signal, fn)
+        table.insert(Keystrokes.Connections, signal:Connect(fn))
+    end
 
-        panel.Parent.Enabled = KSState.Visible
+    -- ============ som ============
+    -- Cada tecla sorteia uma variacao sem repetir a anterior, para nao soar
+    -- mecanico. O mouse usa sempre o mesmo clique.
+    local function BuildSounds()
+        if Keystrokes.SoundFolder then return end
 
-        local visibleCount, maxWidth = 0, 0
-        for _, cell in ipairs(Keystrokes.Cells) do
-            local show = KSState.Enabled[cell.Def.Id] == true
-            cell.Frame.Visible = show
-            cell.Frame.Size = UDim2.fromOffset(KSState.Size, KSState.Size)
-            cell.Label.TextSize = math.max(10, math.floor(KSState.Size * 0.3))
-            cell.Painted = nil
-            if show then
-                visibleCount = visibleCount + 1
-                maxWidth = maxWidth + KSState.Size + KSState.Gap
-            end
+        local folder = Instance.new("Folder")
+        folder.Name = "Vsync_Keystrokes_Sounds"
+        folder.Parent = KSSound
+        Keystrokes.SoundFolder = folder
+
+        for i, id in ipairs(KS_KEY_SOUNDS) do
+            Keystrokes.Sounds[i] = Make("Sound", {
+                Name = "KeySound_" .. i,
+                SoundId = "rbxassetid://" .. id,
+                Volume = KSState.Volume,
+            }, folder)
         end
 
-        -- O UIListLayout posiciona as celulas; so o padding e o tamanho do
-        -- painel precisam acompanhar o slider, senao o espacamento na tela
-        -- fica no valor de quando o painel foi criado.
-        Keystrokes.Layout.Padding = UDim.new(0, KSState.Gap)
-        maxWidth = math.max(0, maxWidth - KSState.Gap)
-        panel.Size = UDim2.fromOffset(maxWidth, KSState.Size)
-        panel.Visible = visibleCount > 0
+        Keystrokes.MouseSound = Make("Sound", {
+            Name = "MouseClick",
+            SoundId = "rbxassetid://" .. KS_MOUSE_SOUND,
+            Volume = KSState.Volume,
+        }, folder)
     end
 
-    local function CreateCell(def)
-        local panel = EnsurePanel()
-
-        local frame = Instance.new("Frame")
-        frame.Name = "KS_" .. def.Id
-        frame.LayoutOrder = #Keystrokes.Cells + 1
-        frame.Size = UDim2.fromOffset(KSState.Size, KSState.Size)
-        frame.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
-        frame.BackgroundTransparency = KSState.Transparency
-        frame.BorderSizePixel = 0
-        frame.Parent = panel
-
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = frame
-
-        local stroke = Instance.new("UIStroke")
-        stroke.Color = Color3.fromRGB(90, 90, 90)
-        stroke.Thickness = 1
-        stroke.Transparency = 0.5
-        stroke.Parent = frame
-
-        local label = Instance.new("TextLabel")
-        label.Name = "Label"
-        label.Size = UDim2.fromScale(1, 1)
-        label.BackgroundTransparency = 1
-        label.Font = Enum.Font.GothamBold
-        label.Text = def.Label
-        label.TextSize = math.max(10, math.floor(KSState.Size * 0.3))
-        label.TextColor3 = Color3.fromRGB(230, 230, 230)
-        label.Parent = frame
-
-        local cell = { Def = def, Frame = frame, Stroke = stroke, Label = label, Painted = nil }
-        table.insert(Keystrokes.Cells, cell)
-        return cell
+    local function PlayKeySound()
+        if not KSState.Enabled or #KS_KEY_SOUNDS == 0 then return end
+        local index = math.random(#KS_KEY_SOUNDS)
+        if #KS_KEY_SOUNDS > 1 then
+            while index == Keystrokes.LastSound do
+                index = math.random(#KS_KEY_SOUNDS)
+            end
+        end
+        Keystrokes.LastSound = index
+        local s = Keystrokes.Sounds[index]
+        if not s then return end
+        pcall(function()
+            s:Stop()
+            s.TimePosition = 0
+            s:Play()
+        end)
     end
 
-    local function IsMouseDown(index, buttons)
-        if not buttons then return false end
-        local want = (index == 1) and Enum.UserInputType.MouseButton1 or Enum.UserInputType.MouseButton2
-        for _, b in ipairs(buttons) do
-            if b.UserInputType == want then return true end
+    local function PlayMouseSound()
+        if not KSState.Enabled then return end
+        local s = Keystrokes.MouseSound
+        if not s then return end
+        pcall(function()
+            s:Stop()
+            s.TimePosition = 0
+            s:Play()
+        end)
+    end
+
+    -- ============ teclas ============
+    local function CreateKey(name, x, y, w, h, textSize)
+        local key = Make("TextButton", {
+            Name = "KS_" .. name,
+            Position = UDim2.fromOffset(x, y),
+            Size = UDim2.fromOffset(w, h),
+            BackgroundColor3 = KSState.KeyColor,
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            Text = "",
+            ZIndex = 3,
+        }, Keystrokes.Root)
+
+        Make("UICorner", { CornerRadius = UDim.new(0, 6) }, key)
+
+        local stroke = Make("UIStroke", {
+            Color = Color3.fromRGB(48, 48, 57),
+            Thickness = 1,
+            Transparency = 0.1,
+        }, key)
+
+        Make("UIGradient", {
+            Rotation = 90,
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.fromRGB(48, 48, 57)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(21, 21, 27)),
+            }),
+        }, key)
+
+        local label = Make("TextLabel", {
+            Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1,
+            Text = name,
+            TextColor3 = KSState.TextColor,
+            TextSize = textSize or 12,
+            Font = Enum.Font.GothamBold,
+            ZIndex = 4,
+        }, key)
+
+        Keystrokes.Keys[name] = { Frame = key, Label = label, Stroke = stroke, Active = false }
+        return Keystrokes.Keys[name]
+    end
+
+    local KS_H, KS_SMALL, KS_STEP = 23, 25, 28
+
+    local function BuildKeyboardFull()
+        for i = 1, 5 do
+            CreateKey(tostring(i), 66 + (i - 1) * KS_STEP, 0, KS_SMALL, KS_H)
+        end
+        CreateKey("TAB", 0, 27, 54, KS_H, 10)
+        for i, n in ipairs({ "Q", "W", "E", "R", "T" }) do
+            CreateKey(n, 58 + (i - 1) * KS_STEP, 27, KS_SMALL, KS_H)
+        end
+        CreateKey("CAPS\nLOCK", 0, 54, 62, KS_H, 9)
+        for i, n in ipairs({ "A", "S", "D", "F", "G" }) do
+            CreateKey(n, 66 + (i - 1) * KS_STEP, 54, KS_SMALL, KS_H)
+        end
+        CreateKey("SHIFT", 0, 81, 75, KS_H, 10)
+        for i, n in ipairs({ "Z", "X", "C", "V" }) do
+            CreateKey(n, 79 + (i - 1) * KS_STEP, 81, KS_SMALL, KS_H)
+        end
+        CreateKey("CTRL", 0, 108, 52, KS_H, 10)
+        CreateKey("ALT", 57, 108, 52, KS_H, 10)
+        CreateKey("SPACE", 114, 108, 117, KS_H, 9)
+    end
+
+    -- Modo WASD: so o bloco de movimento, no mesmo estilo.
+    local function BuildKeyboardWASD()
+        CreateKey("W", 30, 0, 34, 30, 13)
+        CreateKey("A", 0, 34, 30, 30, 13)
+        CreateKey("S", 30, 34, 30, 30, 13)
+        CreateKey("D", 60, 34, 30, 30, 13)
+        CreateKey("SHIFT", 0, 68, 44, 24, 9)
+        CreateKey("SPACE", 48, 68, 80, 24, 9)
+    end
+
+    -- ============ mouse ============
+    local function BuildMouse()
+        local area = Make("Frame", {
+            Name = "KS_MouseArea",
+            Position = UDim2.fromOffset(278, 1),
+            Size = UDim2.fromOffset(55, 120),
+            BackgroundTransparency = 1,
+        }, Keystrokes.Root)
+        Keystrokes.Mouse.Area = area
+
+        local body = Make("Frame", {
+            Name = "Body",
+            Position = UDim2.fromOffset(2, 1),
+            Size = UDim2.fromOffset(50, 111),
+            BackgroundColor3 = KSState.MouseColor,
+            BorderSizePixel = 0,
+        }, area)
+        Make("UICorner", { CornerRadius = UDim.new(0, 22) }, body)
+        Make("UIStroke", { Color = Color3.fromRGB(255, 100, 210), Thickness = 1, Transparency = 0.1 }, body)
+        Keystrokes.Mouse.Body = body
+
+        local left = Make("Frame", {
+            Name = "Left",
+            Position = UDim2.fromOffset(2, 2),
+            Size = UDim2.new(0.5, -2, 0, 33),
+            BackgroundColor3 = KSState.MouseColor,
+            BorderSizePixel = 0,
+        }, body)
+        Make("UICorner", { CornerRadius = UDim.new(0, 20) }, left)
+        Keystrokes.Mouse.Left = left
+
+        local right = Make("Frame", {
+            Name = "Right",
+            AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, -2, 0, 2),
+            Size = UDim2.new(0.5, -2, 0, 33),
+            BackgroundColor3 = KSState.MouseColor,
+            BorderSizePixel = 0,
+        }, body)
+        Make("UICorner", { CornerRadius = UDim.new(0, 20) }, right)
+        Keystrokes.Mouse.Right = right
+
+        Make("Frame", {
+            Name = "Divider",
+            Position = UDim2.fromOffset(24, 0),
+            Size = UDim2.new(0, 1, 0, 34),
+            BackgroundColor3 = Color3.fromRGB(100, 20, 75),
+            BorderSizePixel = 0,
+        }, body)
+
+        local wheel = Make("Frame", {
+            Name = "Wheel",
+            AnchorPoint = Vector2.new(0.5, 0),
+            Position = UDim2.new(0.5, 0, 0, 6),
+            Size = UDim2.fromOffset(8, 19),
+            BackgroundColor3 = Color3.fromRGB(22, 22, 28),
+            BorderSizePixel = 0,
+            ZIndex = 6,
+        }, body)
+        Make("UICorner", { CornerRadius = UDim.new(0, 5) }, wheel)
+        Make("UIStroke", { Color = Color3.fromRGB(220, 220, 230), Thickness = 1, Transparency = 0.1 }, wheel)
+        Keystrokes.Mouse.Wheel = wheel
+
+        local ring = Make("Frame", {
+            Name = "Ring",
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0, 79),
+            Size = UDim2.fromOffset(25, 25),
+            BackgroundTransparency = 1,
+        }, body)
+        Make("UICorner", { CornerRadius = UDim.new(0, 50) }, ring)
+
+        Keystrokes.Mouse.RingStroke = Make("UIStroke", {
+            Color = Color3.fromRGB(220, 240, 255),
+            Thickness = 2,
+            Transparency = 0.1,
+        }, ring)
+
+        local dot = Make("Frame", {
+            Name = "Dot",
+            Position = UDim2.fromOffset(7, 8),
+            Size = UDim2.fromOffset(7, 7),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BorderSizePixel = 0,
+        }, ring)
+        Make("UICorner", { CornerRadius = UDim.new(0, 50) }, dot)
+    end
+
+    -- Trocar FULL<->WASD destroi as teclas antigas e redesenha, senao os
+    -- dois layouts ficariam sobrepostos no mesmo frame.
+    local function RebuildLayout()
+        if not Keystrokes.Root then return end
+        for _, data in pairs(Keystrokes.Keys) do
+            pcall(function() data.Frame:Destroy() end)
+        end
+        Keystrokes.Keys = {}
+
+        if KSState.Layout == "WASD" then
+            BuildKeyboardWASD()
+            if Keystrokes.Mouse.Area then
+                Keystrokes.Mouse.Area.Position = UDim2.fromOffset(160, 8)
+            end
+        else
+            BuildKeyboardFull()
+            if Keystrokes.Mouse.Area then
+                Keystrokes.Mouse.Area.Position = UDim2.fromOffset(278, 1)
+            end
+        end
+        Keystrokes.Mouse.Area.Visible = KSState.ShowMouse
+    end
+
+    -- ============ animacao ============
+    local function SetKey(name, pressed)
+        local data = Keystrokes.Keys[name]
+        if not data or data.Active == pressed then return end
+        data.Active = pressed
+
+        if pressed then
+            Tween(data.Frame, { BackgroundColor3 = KSState.KeyPressedColor })
+            Tween(data.Stroke, { Color = KSState.AccentColor, Transparency = 0 })
+        else
+            Tween(data.Frame, { BackgroundColor3 = KSState.KeyColor })
+            Tween(data.Stroke, { Color = Color3.fromRGB(48, 48, 57) })
+        end
+    end
+
+    local function SetMouse(button, pressed)
+        local M = Keystrokes.Mouse
+        if button == "LEFT" and M.Left then
+            Tween(M.Left, { BackgroundColor3 = pressed and KSState.MousePressedColor or KSState.MouseColor })
+        elseif button == "RIGHT" and M.Right then
+            Tween(M.Right, { BackgroundColor3 = pressed and KSState.MousePressedColor or KSState.MouseColor })
+        end
+
+        if button == "LEFT" or button == "RIGHT" then
+            if M.RingStroke then
+                Tween(M.RingStroke, {
+                    Color = pressed and KSState.AccentColor or Color3.fromRGB(220, 240, 255),
+                    Thickness = pressed and 4 or 2,
+                })
+            end
+        elseif button == "MIDDLE" and M.Wheel then
+            Tween(M.Wheel, {
+                BackgroundColor3 = pressed and KSState.AccentColor or Color3.fromRGB(22, 22, 28),
+            })
+        end
+    end
+
+    -- Mapa do exemplo: tecla fisica -> nome do bloco na tela. Os dois Shift e
+    -- os dois Ctrl apontam para a mesma tecla, que e o que o usuario espera.
+    local KS_KEYMAP = {
+        One = "1", Two = "2", Three = "3", Four = "4", Five = "5",
+        Tab = "TAB",
+        Q = "Q", W = "W", E = "E", R = "R", T = "T",
+        CapsLock = "CAPS\nLOCK",
+        A = "A", S = "S", D = "D", F = "F", G = "G",
+        LeftShift = "SHIFT", RightShift = "SHIFT",
+        Z = "Z", X = "X", C = "C", V = "V",
+        LeftControl = "CTRL", RightControl = "CTRL",
+        LeftAlt = "ALT", RightAlt = "ALT",
+        Space = "SPACE",
+    }
+
+    -- Inverso do mapa, com lista: SHIFT tem duas teclas fisicas, e soltar uma
+    -- delas nao pode apagar a tecla se a outra continua pressionada.
+    local KS_CODES_BY_NAME = {}
+    for code, name in pairs(KS_KEYMAP) do
+        KS_CODES_BY_NAME[name] = KS_CODES_BY_NAME[name] or {}
+        table.insert(KS_CODES_BY_NAME[name], code)
+    end
+
+    local function AnyCodeDown(name)
+        local codes = KS_CODES_BY_NAME[name]
+        if not codes then return false end
+        for _, code in ipairs(codes) do
+            local keyCode = Enum.KeyCode[code]
+            if keyCode then
+                local ok, down = pcall(function() return KSUIS:IsKeyDown(keyCode) end)
+                if ok and down then return true end
+            end
         end
         return false
     end
 
-    local function Poll()
-        local panel = Keystrokes.Panel
-        if not panel or not panel.Parent.Enabled then return end
+    -- ============ posicao / estilo ============
+    local function ApplyAnchor()
+        local root = Keystrokes.Root
+        if not root then return end
+        local m = 12
+        if KSState.Anchor == "TopLeft" then
+            root.AnchorPoint = Vector2.new(0, 0)
+            root.Position = UDim2.new(0, m, 0, m + 60)
+        elseif KSState.Anchor == "TopRight" then
+            root.AnchorPoint = Vector2.new(1, 0)
+            root.Position = UDim2.new(1, -m, 0, m + 60)
+        elseif KSState.Anchor == "BottomRight" then
+            root.AnchorPoint = Vector2.new(1, 1)
+            root.Position = UDim2.new(1, -m, 1, -m)
+        else
+            root.AnchorPoint = Vector2.new(0, 1)
+            root.Position = UDim2.new(0, m, 1, -m)
+        end
+    end
 
-        local buttons
-        pcall(function() buttons = KSUIS:GetMouseButtonsPressed() end)
+    -- Em tela estreita (mobile) o painel de 340px nao cabe; encolhe ate 0.65
+    -- para o usuario nao perder as teclas da direita.
+    local function FitToViewport()
+        local camera = workspace.CurrentCamera
+        if not camera or not camera.ViewportSize then return 1 end
+        local available = camera.ViewportSize.X - 24
+        if available <= 0 then return 1 end
+        return math.clamp(available / KS_BASE_W, 0.65, 1)
+    end
 
-        for _, cell in ipairs(Keystrokes.Cells) do
-            if cell.Frame.Visible then
-                local on
-                if cell.Def.Mouse then
-                    on = IsMouseDown(cell.Def.Mouse, buttons)
-                else
-                    local ok, down = pcall(function() return KSUIS:IsKeyDown(cell.Def.Key) end)
-                    on = ok and down == true
-                end
-                PaintCell(cell, on)
-            end
+    local function ApplyScale()
+        if Keystrokes.Scale then
+            Keystrokes.Scale.Scale = KSState.Scale * FitToViewport()
+        end
+    end
+
+    local function ApplyMouseVisibility()
+        if Keystrokes.Mouse.Area then Keystrokes.Mouse.Area.Visible = KSState.ShowMouse end
+    end
+
+    local function ApplyVolume()
+        for _, s in pairs(Keystrokes.Sounds) do pcall(function() s.Volume = KSState.Volume end) end
+        if Keystrokes.MouseSound then pcall(function() Keystrokes.MouseSound.Volume = KSState.Volume end) end
+    end
+
+    -- ============ montagem ============
+    -- Rodar o script de novo nao pode empilhar um segundo painel em cima do
+    -- antigo, com dois conjuntos de conexoes tocando som.
+    local previous = getgenv().Vsync_Keystrokes
+    if type(previous) == "table" then
+        if previous.Gui then pcall(function() previous.Gui:Destroy() end) end
+        if previous.SoundFolder then pcall(function() previous.SoundFolder:Destroy() end) end
+        for _, conn in ipairs(previous.Connections or {}) do
+            pcall(function() conn:Disconnect() end)
         end
     end
 
     local savedPos = LoadKS()
 
-    for _, def in ipairs(KS_KEYS) do
-        CreateCell(def)
-    end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "Vsync_Keystrokes"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 999998
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Enabled = KSState.Enabled
+    gui.Parent = KSCoreGui
+    Keystrokes.Gui = gui
 
-    ApplyKSStyle()
+    local root = Make("Frame", {
+        Name = "Overlay",
+        Position = UDim2.fromOffset(12, 75),
+        Size = UDim2.fromOffset(KS_BASE_W, KS_BASE_H),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+    }, gui)
+    Keystrokes.Root = root
 
-    local panel = Keystrokes.Panel
-    panel.Position = UDim2.fromOffset(20, 300)
+    Keystrokes.Scale = Make("UIScale", { Scale = KSState.Scale }, root)
+
+    BuildSounds()
+    BuildKeyboardFull()
+    BuildMouse()
+
+    ApplyAnchor()
     if type(savedPos) == "table" then
-        panel.Position = UDim2.new(savedPos[1] or 0, savedPos[2] or 0, savedPos[3] or 0, savedPos[4] or 0)
+        -- A posicao salva carrega o anchor junto, senao o painel pula de canto
+        -- na primeira vez que a posicao e restaurada.
+        root.AnchorPoint = Vector2.new(savedPos[1] or 0, savedPos[3] or 0)
+        root.Position = UDim2.new(savedPos[1] or 0, savedPos[2] or 0, savedPos[3] or 0, savedPos[4] or 0)
+    end
+    ApplyScale()
+    ApplyMouseVisibility()
+
+    local camera = workspace.CurrentCamera
+    if camera then
+        Connect(camera:GetPropertyChangedSignal("ViewportSize"), ApplyScale)
     end
 
-    -- O painel inteiro arrasta: o frame que agrupa as teclas e o alvo.
-    local dragStart, startPos, dragging
-    local dragArea = Instance.new("TextButton")
-    dragArea.Name = "DragArea"
-    dragArea.BackgroundTransparency = 1
-    dragArea.Text = ""
-    dragArea.Size = UDim2.fromScale(1, 1)
-    dragArea.ZIndex = 2
-    dragArea.Parent = panel
+    -- ============ input ============
+    Connect(KSUIS.InputBegan, function(input)
+        if not KSState.Enabled then return end
+        local t = input.UserInputType
 
-    dragArea.InputBegan:Connect(function(input)
+        if t == Enum.UserInputType.Keyboard then
+            PlayKeySound()
+            local name = KS_KEYMAP[input.KeyCode and input.KeyCode.Name or ""]
+            if name then SetKey(name, true) end
+        elseif t == Enum.UserInputType.MouseButton1 then
+            PlayMouseSound()
+            SetMouse("LEFT", true)
+        elseif t == Enum.UserInputType.MouseButton2 then
+            PlayMouseSound()
+            SetMouse("RIGHT", true)
+        elseif t == Enum.UserInputType.MouseButton3 then
+            PlayMouseSound()
+            SetMouse("MIDDLE", true)
+        end
+    end)
+
+    Connect(KSUIS.InputEnded, function(input)
+        if not KSState.Enabled then return end
+        local t = input.UserInputType
+
+        if t == Enum.UserInputType.Keyboard then
+            local name = KS_KEYMAP[input.KeyCode and input.KeyCode.Name or ""]
+            if name then SetKey(name, false) end
+        elseif t == Enum.UserInputType.MouseButton1 then
+            SetMouse("LEFT", false)
+        elseif t == Enum.UserInputType.MouseButton2 then
+            SetMouse("RIGHT", false)
+        elseif t == Enum.UserInputType.MouseButton3 then
+            SetMouse("MIDDLE", false)
+        end
+    end)
+
+    -- Roda do mouse acende o wheel por 0.15s. O token evita que um giro
+    -- antigo apague o brilho de um giro novo.
+    Connect(KSUIS.InputChanged, function(input)
+        if not KSState.Enabled then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+
+        Keystrokes.WheelToken = Keystrokes.WheelToken + 1
+        local token = Keystrokes.WheelToken
+        SetMouse("MIDDLE", true)
+
+        task.delay(0.15, function()
+            if not KSState.Enabled or token ~= Keystrokes.WheelToken then return end
+            SetMouse("MIDDLE", false)
+        end)
+    end)
+
+    -- Rede de seguranca: se um InputEnded se perder (foco da janela), a tecla
+    -- ficaria acesa para sempre. O poll solta o que o servico ja nao reporta.
+    task.spawn(function()
+        while true do
+            task.wait(0.25)
+            if KSState.Enabled then
+                for name, data in pairs(Keystrokes.Keys) do
+                    if data.Active and not AnyCodeDown(name) then
+                        SetKey(name, false)
+                    end
+                end
+            end
+        end
+    end)
+
+    -- Arrastar: so com Lock desligado. Travado, o painel continua lendo input
+    -- normalmente, so nao sai do lugar.
+    local dragStart, startPos, dragging
+    local dragArea = Make("TextButton", {
+        Name = "DragArea",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Text = "",
+        ZIndex = 10,
+    }, root)
+    Keystrokes.DragArea = dragArea
+
+    Connect(dragArea.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragStart = input.Position
-            startPos = panel.Position
+            startPos = root.Position
             dragging = false
         end
     end)
 
-    dragArea.InputEnded:Connect(function(input)
+    Connect(dragArea.InputEnded, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             if dragging then SaveKS() end
             dragStart, dragging = nil, false
         end
     end)
 
-    KSUIS.InputChanged:Connect(function(input)
+    Connect(KSUIS.InputChanged, function(input)
         if not dragStart or KSState.LockPos then return end
         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             local delta = input.Position - dragStart
             if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then dragging = true end
             if dragging then
-                panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
-                                           startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                root.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                                          startPos.Y.Scale, startPos.Y.Offset + delta.Y)
             end
         end
     end)
 
-    -- 30 Hz: mais que isso e desperdicio, menos parece travado.
-    task.spawn(function()
-        while true do
-            task.wait(1 / 30)
-            Poll()
+    -- ============ UI ============
+    local KSMain = KeystrokesTab:DrawSection({ Name = "Keystrokes", Position = "left" })
+    KSMain:AddToggle({
+        Flag = "KS_Ativar", Name = "Keystrokes", Default = KSState.Enabled,
+        Callback = function(v)
+            KSState.Enabled = v
+            gui.Enabled = v
+            SaveKS()
         end
-    end)
-
-    local KSVisual = KeystrokesTab:DrawSection({ Name = "Visual", Position = "left" })
-    KSVisual:AddToggle({
-        Flag = "KS_Mostrar", Name = "Mostrar Keystrokes", Default = KSState.Visible,
-        Callback = function(v) KSState.Visible = v; ApplyKSStyle(); SaveKS() end
     })
-    KSVisual:AddSlider({
-        Flag = "KS_Tamanho", Name = "Tamanho", Min = 26, Max = 80, Default = KSState.Size,
-        Callback = function(v) KSState.Size = math.floor(v); ApplyKSStyle(); SaveKS() end
+    KSMain:AddToggle({
+        Flag = "KS_MostrarMouse", Name = "Mostrar Mouse", Default = KSState.ShowMouse,
+        Callback = function(v) KSState.ShowMouse = v; ApplyMouseVisibility(); SaveKS() end
     })
-    KSVisual:AddSlider({
-        Flag = "KS_Espacamento", Name = "Espaçamento", Min = 0, Max = 20, Default = KSState.Gap,
-        Callback = function(v) KSState.Gap = math.floor(v); ApplyKSStyle(); SaveKS() end
+    KSMain:AddDropdown({
+        Flag = "KS_Tipo", Name = "Tipo", Default = KSState.Layout,
+        Values = { "FULL", "WASD" },
+        Callback = function(v) KSState.Layout = v; RebuildLayout(); SaveKS() end
     })
-    KSVisual:AddSlider({
-        Flag = "KS_Transparencia", Name = "Transparência (solto)", Min = 0, Max = 0.9, Round = 2, Default = KSState.Transparency,
-        Callback = function(v) KSState.Transparency = v; ApplyKSStyle(); SaveKS() end
+    KSMain:AddDropdown({
+        Flag = "KS_Posicao", Name = "Posição", Default = KSState.Anchor,
+        Values = { "BottomLeft", "BottomRight", "TopLeft", "TopRight" },
+        Callback = function(v) KSState.Anchor = v; ApplyAnchor(); SaveKS() end
     })
-    KSVisual:AddColorPicker({
-        Flag = "KS_Cor", Name = "Cor (pressionado)", Default = KSState.Accent,
-        Callback = function(c) KSState.Accent = c; ApplyKSStyle(); SaveKS() end
+    KSMain:AddSlider({
+        Flag = "KS_Tamanho", Name = "Tamanho", Min = 0.5, Max = 1.5, Round = 2, Default = KSState.Scale,
+        Callback = function(v) KSState.Scale = v; ApplyScale(); SaveKS() end
     })
-    KSVisual:AddToggle({
+    KSMain:AddSlider({
+        Flag = "KS_Volume", Name = "Volume", Min = 0, Max = 1, Round = 2, Default = KSState.Volume,
+        Callback = function(v) KSState.Volume = v; ApplyVolume(); SaveKS() end
+    })
+    KSMain:AddToggle({
         Flag = "KS_LockPos", Name = "Lock Posição", Default = KSState.LockPos,
         Callback = function(v) KSState.LockPos = v; SaveKS() end
     })
 
-    local KSKeys = KeystrokesTab:DrawSection({ Name = "Teclas", Position = "right" })
-    for _, def in ipairs(KS_KEYS) do
-        KSKeys:AddToggle({
-            Flag = "KS_Key_" .. def.Id, Name = def.Label, Default = KSState.Enabled[def.Id] == true,
-            Callback = function(v)
-                KSState.Enabled[def.Id] = v
-                ApplyKSStyle()
-                SaveKS()
+    local KSColors = KeystrokesTab:DrawSection({ Name = "Cores", Position = "right" })
+    KSColors:AddColorPicker({
+        Flag = "KS_CorTecla", Name = "Cor da Tecla", Default = KSState.KeyColor,
+        Callback = function(c)
+            KSState.KeyColor = c
+            for _, d in pairs(Keystrokes.Keys) do
+                if not d.Active then d.Frame.BackgroundColor3 = c end
             end
-        })
-    end
+            SaveKS()
+        end
+    })
+    KSColors:AddColorPicker({
+        Flag = "KS_CorTeclaPressionada", Name = "Cor da Tecla Pressionada", Default = KSState.KeyPressedColor,
+        Callback = function(c) KSState.KeyPressedColor = c; SaveKS() end
+    })
+    KSColors:AddColorPicker({
+        Flag = "KS_CorMouse", Name = "Cor do Mouse", Default = KSState.MouseColor,
+        Callback = function(c)
+            KSState.MouseColor = c
+            local M = Keystrokes.Mouse
+            if M.Body then M.Body.BackgroundColor3 = c end
+            if M.Left then M.Left.BackgroundColor3 = c end
+            if M.Right then M.Right.BackgroundColor3 = c end
+            SaveKS()
+        end
+    })
+    KSColors:AddColorPicker({
+        Flag = "KS_CorMousePressionado", Name = "Cor do Mouse Pressionado", Default = KSState.MousePressedColor,
+        Callback = function(c) KSState.MousePressedColor = c; SaveKS() end
+    })
 
     getgenv().Vsync_Keystrokes = Keystrokes
 end
 
 
+
 -- ==============================================================
--- Aba "Overlays": FPS e ping desenhados na tela.
--- O FPS sai da contagem de frames por segundo do RenderStepped; o ping usa
--- Stats.Network.ServerStatsItem, que ja existe no cliente.
+-- Aba "Overlays": FPS (e ping opcional) na tela.
+-- O FPS sai da contagem de frames por segundo do RenderStepped; o ping
+-- usa Stats.Network.ServerStatsItem, que ja existe no cliente.
 -- ==============================================================
-local OverlaysTab = HUDContainer:DrawTab({
+local OverlaysTab = VisualContainer:DrawTab({
     Name = " Overlays ",
     Type = "Single",
     EnableScrolling = true,
 });
 
 do
-    local HttpService = game:GetService("HttpService")
-    local OVUIS = game:GetService("UserInputService")
     local OVRun = game:GetService("RunService")
+    local OVHttp = game:GetService("HttpService")
+    local OVUIS = game:GetService("UserInputService")
     local OVCoreGui = (gethui and gethui()) or game:GetService("CoreGui")
     local OV_PATH = "Vsync/Overlays.json"
 
     local OVState = {
         ShowFPS = true,
         ShowPing = false,
-        Size = 18,
-        Transparency = 0.25,
-        Accent = Color3.fromRGB(255, 255, 255),
-        LockPos = false,
         Visible = true,
-        Pos = nil,
+        LockPos = false,
+        TextSize = 18,
+        TextColor = Color3.fromRGB(255, 255, 255),
+        TextTransparency = 0,
+        BgColor = Color3.fromRGB(0, 0, 0),
+        BgTransparency = 0.5,
     }
 
-    local Overlays = { Panel = nil, Label = nil }
+    local Overlays = { Panel = nil, Label = nil, Stroke = nil }
 
     local function SaveOV()
+        local function rgb(c) return { c.R, c.G, c.B } end
         local out = { State = {
             ShowFPS = OVState.ShowFPS,
             ShowPing = OVState.ShowPing,
-            Size = OVState.Size,
-            Transparency = OVState.Transparency,
-            LockPos = OVState.LockPos,
             Visible = OVState.Visible,
-            Accent = { R = OVState.Accent.R, G = OVState.Accent.G, B = OVState.Accent.B },
+            LockPos = OVState.LockPos,
+            TextSize = OVState.TextSize,
+            TextColor = rgb(OVState.TextColor),
+            TextTransparency = OVState.TextTransparency,
+            BgColor = rgb(OVState.BgColor),
+            BgTransparency = OVState.BgTransparency,
             Pos = Overlays.Panel and {
                 Overlays.Panel.Position.X.Scale, Overlays.Panel.Position.X.Offset,
                 Overlays.Panel.Position.Y.Scale, Overlays.Panel.Position.Y.Offset,
@@ -6612,13 +7018,13 @@ do
         } }
         pcall(function()
             if not isfolder("Vsync") then makefolder("Vsync") end
-            writefile(OV_PATH, HttpService:JSONEncode(out))
+            writefile(OV_PATH, OVHttp:JSONEncode(out))
         end)
     end
 
     local function LoadOV()
         local ok, data = pcall(function()
-            if isfile(OV_PATH) then return HttpService:JSONDecode(readfile(OV_PATH)) end
+            if isfile(OV_PATH) then return OVHttp:JSONDecode(readfile(OV_PATH)) end
             return nil
         end)
         if not (ok and type(data) == "table" and type(data.State) == "table") then return end
@@ -6626,61 +7032,38 @@ do
         local st = data.State
         if st.ShowFPS ~= nil then OVState.ShowFPS = st.ShowFPS end
         if st.ShowPing ~= nil then OVState.ShowPing = st.ShowPing end
-        OVState.Size = st.Size or OVState.Size
-        OVState.Transparency = st.Transparency or OVState.Transparency
-        if st.LockPos ~= nil then OVState.LockPos = st.LockPos end
         if st.Visible ~= nil then OVState.Visible = st.Visible end
-        if st.Accent then OVState.Accent = Color3.new(st.Accent.R, st.Accent.G, st.Accent.B) end
+        if st.LockPos ~= nil then OVState.LockPos = st.LockPos end
+        OVState.TextSize = st.TextSize or OVState.TextSize
+        if st.TextTransparency ~= nil then OVState.TextTransparency = st.TextTransparency end
+        if st.BgTransparency ~= nil then OVState.BgTransparency = st.BgTransparency end
+
+        local function color(t, fallback)
+            if type(t) == "table" then return Color3.new(t[1] or 0, t[2] or 0, t[3] or 0) end
+            return fallback
+        end
+        OVState.TextColor = color(st.TextColor, OVState.TextColor)
+        OVState.BgColor = color(st.BgColor, OVState.BgColor)
         return st.Pos
     end
 
-    local function EnsureOVPanel()
-        if Overlays.Panel and Overlays.Panel.Parent then return Overlays.Panel end
-
-        local gui = Instance.new("ScreenGui")
-        gui.Name = "Vsync_Overlays"
-        gui.ResetOnSpawn = false
-        gui.IgnoreGuiInset = true
-        gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        gui.DisplayOrder = 9997
-        gui.Parent = OVCoreGui
-
-        local panel = Instance.new("Frame")
-        panel.Name = "Panel"
-        panel.BackgroundTransparency = 1
-        panel.BorderSizePixel = 0
-        panel.AutomaticSize = Enum.AutomaticSize.XY
-        panel.Parent = gui
-
-        local label = Instance.new("TextLabel")
-        label.Name = "Label"
-        label.BackgroundTransparency = 1
-        label.Font = Enum.Font.GothamBold
-        label.Text = "FPS: --"
-        label.TextColor3 = OVState.Accent
-        label.TextTransparency = OVState.Transparency
-        label.TextSize = OVState.Size
-        label.TextStrokeTransparency = 0.4
-        label.Size = UDim2.fromScale(1, 1)
-        label.AutomaticSize = Enum.AutomaticSize.XY
-        label.Parent = panel
-
-        Overlays.Panel = panel
-        Overlays.Label = label
-        return panel
-    end
-
     local function ApplyOVStyle()
-        if not Overlays.Panel then return end
-        Overlays.Panel.Parent.Enabled = OVState.Visible
-        Overlays.Label.TextSize = OVState.Size
-        Overlays.Label.TextColor3 = OVState.Accent
-        Overlays.Label.TextTransparency = OVState.Transparency
+        local p = Overlays.Panel
+        if not p then return end
+
+        p.Parent.Enabled = OVState.Visible
+        p.BackgroundColor3 = OVState.BgColor
+        p.BackgroundTransparency = OVState.BgTransparency
+
+        Overlays.Label.TextSize = OVState.TextSize
+        Overlays.Label.TextColor3 = OVState.TextColor
+        Overlays.Label.TextTransparency = OVState.TextTransparency
     end
 
-    -- Contagem de frames por janela de 1s em vez de media movel: o numero
-    -- acompanha engasgos na hora, que e o que o usuario quer ver.
+    -- Contagem por janela de 1s, nao media movel: o numero acompanha engasgos
+    -- na hora, que e o que o usuario quer ver.
     local frames, elapsed, fps = 0, 0, 0
+
     local function GetPing()
         local ok, stats = pcall(function() return game:GetService("Stats") end)
         if not ok or not stats then return nil end
@@ -6693,7 +7076,8 @@ do
     end
 
     local function Render()
-        if not Overlays.Panel or not Overlays.Panel.Parent.Enabled then return end
+        local p = Overlays.Panel
+        if not p or not p.Parent.Enabled then return end
 
         local text
         if OVState.ShowFPS and OVState.ShowPing then
@@ -6713,14 +7097,54 @@ do
 
     local savedPos = LoadOV()
 
-    EnsureOVPanel()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "Vsync_Overlays"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    gui.DisplayOrder = 999997
+    gui.Parent = OVCoreGui
+
+    local panel = Instance.new("Frame")
+    panel.Name = "Panel"
+    panel.BackgroundColor3 = OVState.BgColor
+    panel.BackgroundTransparency = OVState.BgTransparency
+    panel.BorderSizePixel = 0
+    panel.Position = UDim2.fromOffset(20, 60)
+    panel.Size = UDim2.fromOffset(150, 32)
+    panel.Parent = gui
+    Overlays.Panel = panel
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = panel
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(60, 60, 60)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.5
+    stroke.Parent = panel
+    Overlays.Stroke = stroke
+
+    local label = Instance.new("TextLabel")
+    label.Name = "Label"
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.Text = "FPS: --"
+    label.TextColor3 = OVState.TextColor
+    label.TextTransparency = OVState.TextTransparency
+    label.TextSize = OVState.TextSize
+    label.Size = UDim2.fromScale(1, 1)
+    label.Parent = panel
+    Overlays.Label = label
+
     ApplyOVStyle()
 
-    Overlays.Panel.Position = UDim2.fromOffset(20, 60)
     if type(savedPos) == "table" then
-        Overlays.Panel.Position = UDim2.new(savedPos[1] or 0, savedPos[2] or 0, savedPos[3] or 0, savedPos[4] or 0)
+        panel.Position = UDim2.new(savedPos[1] or 0, savedPos[2] or 0, savedPos[3] or 0, savedPos[4] or 0)
     end
 
+    -- Lock ligado: trava. Desligado: segurar e arrastar move o painel.
     local dragStart, startPos, dragging
     local dragArea = Instance.new("TextButton")
     dragArea.Name = "DragArea"
@@ -6728,12 +7152,12 @@ do
     dragArea.Text = ""
     dragArea.Size = UDim2.fromScale(1, 1)
     dragArea.ZIndex = 2
-    dragArea.Parent = Overlays.Panel
+    dragArea.Parent = panel
 
     dragArea.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragStart = input.Position
-            startPos = Overlays.Panel.Position
+            startPos = panel.Position
             dragging = false
         end
     end)
@@ -6751,8 +7175,8 @@ do
             local delta = input.Position - dragStart
             if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then dragging = true end
             if dragging then
-                Overlays.Panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
-                                                    startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                                           startPos.Y.Scale, startPos.Y.Offset + delta.Y)
             end
         end
     end)
@@ -6767,7 +7191,7 @@ do
         Render()
     end)
 
-    local OVSection = OverlaysTab:DrawSection({ Name = "Overlay", Position = "left" })
+    local OVSection = OverlaysTab:DrawSection({ Name = "FPS Counter", Position = "left" })
     OVSection:AddToggle({
         Flag = "OV_Mostrar", Name = "Mostrar Overlay", Default = OVState.Visible,
         Callback = function(v) OVState.Visible = v; ApplyOVStyle(); SaveOV() end
@@ -6780,23 +7204,31 @@ do
         Flag = "OV_Ping", Name = "Mostrar Ping", Default = OVState.ShowPing,
         Callback = function(v) OVState.ShowPing = v; Render(); SaveOV() end
     })
+    OVSection:AddToggle({
+        Flag = "OV_LockPos", Name = "Lock", Default = OVState.LockPos,
+        Callback = function(v) OVState.LockPos = v; SaveOV() end
+    })
 
     local OVStyle = OverlaysTab:DrawSection({ Name = "Aparência", Position = "right" })
     OVStyle:AddSlider({
-        Flag = "OV_Tamanho", Name = "Tamanho da Fonte", Min = 10, Max = 40, Default = OVState.Size,
-        Callback = function(v) OVState.Size = math.floor(v); ApplyOVStyle(); SaveOV() end
-    })
-    OVStyle:AddSlider({
-        Flag = "OV_Transparencia", Name = "Transparência", Min = 0, Max = 1, Round = 2, Default = OVState.Transparency,
-        Callback = function(v) OVState.Transparency = v; ApplyOVStyle(); SaveOV() end
+        Flag = "OV_Tamanho", Name = "Tamanho", Min = 10, Max = 40, Default = OVState.TextSize,
+        Callback = function(v) OVState.TextSize = math.floor(v); ApplyOVStyle(); SaveOV() end
     })
     OVStyle:AddColorPicker({
-        Flag = "OV_Cor", Name = "Cor", Default = OVState.Accent,
-        Callback = function(c) OVState.Accent = c; ApplyOVStyle(); SaveOV() end
+        Flag = "OV_Cor", Name = "Cor do Texto", Default = OVState.TextColor,
+        Callback = function(c) OVState.TextColor = c; ApplyOVStyle(); SaveOV() end
     })
-    OVStyle:AddToggle({
-        Flag = "OV_LockPos", Name = "Lock Posição", Default = OVState.LockPos,
-        Callback = function(v) OVState.LockPos = v; SaveOV() end
+    OVStyle:AddSlider({
+        Flag = "OV_Transparencia", Name = "Transparência do Texto", Min = 0, Max = 1, Round = 2, Default = OVState.TextTransparency,
+        Callback = function(v) OVState.TextTransparency = v; ApplyOVStyle(); SaveOV() end
+    })
+    OVStyle:AddColorPicker({
+        Flag = "OV_CorFundo", Name = "Cor do Fundo", Default = OVState.BgColor,
+        Callback = function(c) OVState.BgColor = c; ApplyOVStyle(); SaveOV() end
+    })
+    OVStyle:AddSlider({
+        Flag = "OV_TransparenciaFundo", Name = "Transparência do Fundo", Min = 0, Max = 1, Round = 2, Default = OVState.BgTransparency,
+        Callback = function(v) OVState.BgTransparency = v; ApplyOVStyle(); SaveOV() end
     })
 
     getgenv().Vsync_Overlays = Overlays
