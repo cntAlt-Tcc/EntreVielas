@@ -676,6 +676,15 @@ gethui = function() return CoreGui end
 -- getgenv: tabela compartilhada; o bloco le/escreve varias chaves nela.
 local GENV = {}
 getgenv = function() return GENV end
+
+-- Executores reais deixam `debug` gravavel (hooks trocam debug.info, e o
+-- fail-open depende de detectar debug ausente). A tabela debug do Luau CLI e
+-- readonly, entao o mock expoe uma copia gravavel com os mesmos campos.
+local RealDebug = debug
+debug = setmetatable({}, {
+    __index = RealDebug,
+    __newindex = function(t, k, v) rawset(t, k, v) end,
+})
 pcall = pcall
 
 -- ===== filesystem do executor =====

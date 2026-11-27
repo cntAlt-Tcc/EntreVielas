@@ -75,7 +75,9 @@ if SCRIPT_NAME == 'Script/A':
                     or _re.search(r'(^|\n)(local\s+)?function\s+%s\s*\(|\b%s\s*=' % (x, x), main)]
     main += '__M.Save = {\n' + ''.join(
         '    %s = %s,\n' % (x, x) for x in save_present) + '}\n'
+    main += '__M.Save.FS = __FS\n'
     main += '__M.Lib = FiveSync\n'
+    main += '__M.SA = getgenv().Vsync_SilentAim\n'
 
 driver = ''
 if len(sys.argv) > 1:

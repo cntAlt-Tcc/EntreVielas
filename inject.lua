@@ -5986,7 +5986,7 @@ function FiveSync:_LoadElement(Parent: Frame , EnabledLine: boolean , Signal , D
 			Name = "TextBox",
 			Default = "",
 			Placeholder = "Placeholder",
-			Numberic = false,
+			Numeric = false,
 			Callback = function() end,
 		});
 
@@ -8651,6 +8651,7 @@ function FiveSync.new(Config : Window)
 			local UICorner_3 = Instance.new("UICorner")
 			local AuthorText = Instance.new("TextLabel")
 			local DelButton = Instance.new("ImageButton")
+			local LockButton = Instance.new("ImageButton")
 			local UICorner = Instance.new("UICorner")
 			local UIGradient = Instance.new("UIGradient")
 
@@ -8669,6 +8670,26 @@ function FiveSync.new(Config : Window)
 
 			UICorner.CornerRadius = UDim.new(1, 0)
 			UICorner.Parent = DelButton
+
+			-- Lock vem antes do delete no layout: trava o config para que Save e
+			-- Delete nao possam sobrescrever o que o usuario quer preservar.
+			LockButton.Name = FiveSync:_RandomString()
+			LockButton.Parent = LinkValues
+			LockButton.BackgroundTransparency = 1.000
+			LockButton.BorderColor3 = Color3.fromRGB(0, 0, 0)
+			LockButton.BorderSizePixel = 0
+			LockButton.LayoutOrder = -9998
+			LockButton.Size = UDim2.new(0, 35, 0, 15)
+			LockButton.ZIndex = 14
+			LockButton.Image = FiveSync:_GetIcon('unlock')
+			LockButton.ImageColor3 = FiveSync.Colors.SwitchColor
+			LockButton.ImageTransparency = 0.500
+			LockButton.ScaleType = Enum.ScaleType.Fit
+
+			local LockCorner = Instance.new("UICorner")
+			LockCorner.CornerRadius = UDim.new(1, 0)
+			LockCorner.Parent = LockButton
+
 			ConfigBlock.Name = FiveSync:_RandomString()
 			ConfigBlock.Parent = ScrollingFrame
 			ConfigBlock.BackgroundColor3 = Color3.fromRGB(33, 34, 40)
@@ -8907,6 +8928,16 @@ function FiveSync.new(Config : Window)
 				end;
 			end;
 
+			-- Reflete o estado do cadeado. Fica num metodo para o Refresh e o
+			-- clique usarem a mesma regra.
+			function ConfigButton:SetLockedState(locked)
+				ConfigButton.Locked = locked and true or false
+				LockButton.Image = FiveSync:_GetIcon(ConfigButton.Locked and 'lock' or 'unlock')
+				LockButton.ImageColor3 = ConfigButton.Locked
+					and Color3.fromRGB(255, 200, 87)
+					or FiveSync.Colors.SwitchColor
+			end
+
 			function ConfigButton:Toggle(v)
 				if v then
 					FiveSync:_Animation(ConfigBlock,Tween,{
@@ -9033,6 +9064,12 @@ function FiveSync.new(Config : Window)
 				task.spawn(ConfigButton.OnSave);
 			end);
 
+			LockButton.MouseButton1Click:Connect(function()
+				if ConfigButton.OnToggleLock then
+					task.spawn(ConfigButton.OnToggleLock);
+				end
+			end)
+
 			DelButton.MouseButton1Click:Connect(function()
 				task.spawn(ConfigButton.OnDelete);
 			end)
@@ -9040,6 +9077,7 @@ function FiveSync.new(Config : Window)
 			ConfigButton.OnLoad = nil;
 			ConfigButton.OnSave = nil;
 			ConfigButton.OnDelete = nil;
+			ConfigButton.OnToggleLock = nil;
 
 			return ConfigButton;
 		end;
@@ -9085,6 +9123,7 @@ function FiveSync.new(Config : Window)
 					local Info = (type(v.Info) == "table") and v.Info or {};
 
 					Button:SetInfo(Info.Author or "Desconhecido",v.Name);
+					Button:SetLockedState(Configuration.Config:IsLocked(v.Name));
 
 					table.insert(__signals,TabOpenSignal:Connect(function(v)
 						Button:Toggle(v);
@@ -9100,7 +9139,19 @@ function FiveSync.new(Config : Window)
 						Configuration.Config:LoadConfig(v.Name);
 					end;
 
+					-- Avisar "salvo"/"deletado" antes de saber o resultado mentiria
+					-- quando o config esta travado, entao o lock e checado primeiro.
 					Button.OnSave = function()
+						if Configuration.Config:IsLocked(v.Name) then
+							WindowArgs.Notify.new({
+								Title = "Configs",
+								Icon = FiveSync:_GetIcon('lock'),
+								Content = "Config \""..v.Name.."\" is locked"
+							})
+
+							return;
+						end
+
 						WindowArgs.Notify.new({
 							Title = "Configs",
 							Icon = FiveSync:CacheImage(Config.Logo),
@@ -9116,6 +9167,16 @@ function FiveSync.new(Config : Window)
 					end
 
 					Button.OnDelete = function()
+						if Configuration.Config:IsLocked(v.Name) then
+							WindowArgs.Notify.new({
+								Title = "Configs",
+								Icon = FiveSync:_GetIcon('lock'),
+								Content = "Config \""..v.Name.."\" is locked"
+							})
+
+							return;
+						end
+
 						WindowArgs.Notify.new({
 							Title = "Configs",
 							Icon = FiveSync:CacheImage(Config.Logo),
@@ -9123,6 +9184,23 @@ function FiveSync.new(Config : Window)
 						})
 
 						Configuration.Config:DeleteConfig(v.Name)
+					end
+
+					Button.OnToggleLock = function()
+						local locked = not Configuration.Config:IsLocked(v.Name);
+
+						if not Configuration.Config:SetLocked(v.Name, locked) then
+							return;
+						end
+
+						Button:SetLockedState(locked);
+
+						WindowArgs.Notify.new({
+							Title = "Configs",
+							Icon = FiveSync:_GetIcon(locked and 'lock' or 'unlock'),
+							Content = string.format("Config \"%s\" %s",
+								v.Name, locked and "locked" or "unlocked")
+						})
 					end
 				end;
 			end;
@@ -10800,9 +10878,27 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 			})
 		end
 
-		writefile(FiveSync:_Path(Args.Directory , Config.Name) , HttpService:JSONEncode(Flags));
+		local _path = FiveSync:_Path(Args.Directory , Config.Name);
+
+		-- Sobrescrever um config travado apagaria o estado que o usuario
+		-- protegeu de proposito. O lock so cai via SetLocked.
+		if isfile(_path) and Args:IsLocked(Config.Name) then
+			if Args.EnableNotify then
+				notify.new({
+					Title = "Configs",
+					Icon = FiveSync:_GetIcon('lock'),
+					Content = "Config \""..Config.Name.."\" is locked"
+				})
+			end
+
+			return false;
+		end;
+
+		writefile(_path , HttpService:JSONEncode(Flags));
 
 		FiveSync:_PlaySound("Config");
+
+		return true;
 	end;
 
 	function Args:LoadConfigFromString(str: string)
@@ -10897,6 +10993,34 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 		return decoded.__INFORMATION;
 	end;
 
+	-- Locked configs are protected from being overwritten or deleted. The lock
+	-- lives inside the config's own __INFORMATION block, so it travels with the
+	-- file instead of a sidecar that could drift out of sync with it.
+	function Args:IsLocked(ConfigName: string)
+		local info = Args:ReadInfo(ConfigName);
+
+		return (info and info.Locked == true) or false;
+	end;
+
+	function Args:SetLocked(ConfigName: string, locked: boolean)
+		local _path = FiveSync:_Path(Args.Directory , ConfigName);
+
+		if not isfile(_path) then return false; end;
+
+		local ok, decoded = pcall(function()
+			return HttpService:JSONDecode(readfile(_path));
+		end);
+
+		if not ok or type(decoded) ~= "table" then return false; end;
+
+		decoded.__INFORMATION = decoded.__INFORMATION or {};
+		decoded.__INFORMATION.Locked = locked and true or nil;
+
+		writefile(_path , HttpService:JSONEncode(decoded));
+
+		return true;
+	end;
+
 	function Args:GetConfigs()
 		local names = {};
 
@@ -10937,8 +11061,22 @@ function FiveSync:ConfigManager(ConfigManager: ConfigManager) : ConfigFunctions
 		end
 
 		if isfile(_path) then
+			if Args:IsLocked(ConfigName) then
+				if Args.EnableNotify then
+					notify.new({
+						Title = "Configs",
+						Icon = FiveSync:_GetIcon('lock'),
+						Content = "Config \""..ConfigName.."\" is locked"
+					})
+				end
+
+				return false;
+			end;
+
 			delfile(_path);
 		end;
+
+		return true;
 	end;
 
 	function Args:GetConfigCount()

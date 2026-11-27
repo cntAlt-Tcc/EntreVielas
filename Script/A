@@ -2975,15 +2975,36 @@ local SA_FireKeywords = {
     "bullet", "gun", "fire", "shoot", "weapon", "projectile",
     "shot", "raycast", "trace", "attack", "aim", "combat", "blaster"
 }
+-- Fonte deste script, capturada no load. A checagem de "fire func" precisa
+-- ignorar os próprios frames: o nome SA_IsFireFunc contém "fire" e casaria
+-- consigo mesmo, fazendo o gate liberar TODA chamada e nunca filtrar nada.
+local SA_OwnSource = (debug and debug.info) and debug.info(1, "s") or nil
+
 local function SA_IsFireFunc()
     if not getgenv().SilentAim_FireFunc then return true end
-    -- Sem debug.traceback não dá pra inspecionar a pilha: não bloquear o tiro.
-    if not (debug and debug.traceback) then return true end
-    local ok, tb = pcall(function() return debug.traceback():lower() end)
-    if not ok or type(tb) ~= "string" then return true end
-    for _, kw in ipairs(SA_FireKeywords) do
-        if tb:find(kw, 1, true) then return true end
+    -- Sem debug.info não dá pra inspecionar a pilha: não bloquear o tiro.
+    if not (debug and debug.info) then return true end
+
+    local level, inspected = 1, 0
+    while true do
+        local ok, src, name = pcall(debug.info, level, "sn")
+        if not ok or src == nil then break end
+        -- [C] são frames nativos (pcall incluso); os do próprio script não
+        -- descrevem quem chamou.
+        if src ~= "[C]" and src ~= SA_OwnSource then
+            inspected = inspected + 1
+            local lower = tostring(name):lower()
+            for _, kw in ipairs(SA_FireKeywords) do
+                if lower:find(kw, 1, true) then return true end
+            end
+        end
+        level = level + 1
     end
+
+    -- Nenhum frame do jogo visível (executor que devolve fonte constante ou
+    -- pilha vazia): não dá para decidir, então não bloquear o tiro.
+    if inspected == 0 then return true end
+
     return false
 end
 
@@ -3293,6 +3314,12 @@ SAConfig:AddParagraph({ Title = "Ghost Mode:", Content = "Instala o hook na meta
 FiveSync:AddOnConfigLoad(function()
     SA_SetActive(getgenv().SilentAim_Ativo)
 end)
+
+-- Exposto para depuração/uso externo (e para o harness de teste).
+getgenv().Vsync_SilentAim = {
+    IsFireFunc = SA_IsFireFunc,
+    FireKeywords = SA_FireKeywords,
+}
 end
 
 
@@ -3940,10 +3967,11 @@ local Config = {
     FOVLine = { Enabled = false, Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 1, Mode = "Ambos", Origin = "Tela",
                 RGB = true, Glow = false, GlowIntensity = 1 },
     -- Chams: Highlight no personagem (preenchimento + contorno). `DepthMode`
-    -- "Always" desenha por cima das paredes; "Occluded" respeita a geometria.
+    -- "AlwaysOnTop" desenha por cima das paredes; "Occluded" respeita a
+    -- geometria. São os únicos valores de Enum.HighlightDepthMode.
     Chams = { Enabled = false, Fill = true, FillColor = Color3.fromRGB(255, 255, 255), FillTransparency = 0.5,
               Outline = true, OutlineColor = Color3.fromRGB(255, 255, 255), OutlineTransparency = 0,
-              DepthMode = "Always", RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
+              DepthMode = "AlwaysOnTop", RGB = true, Team = true, Glow = false, GlowIntensity = 1 },
     Rainbow = { Enabled = false, Speed = 0.05 },
     -- Team Color: cada elemento usa a cor do time do jogador em vez da cor fixa.
     -- TeamRGB anima dentro da faixa daquele matiz (verde -> vários tons de
@@ -4248,11 +4276,39 @@ end
 local ChamsFolder = nil
 local function ChamsParent()
     if ChamsFolder and ChamsFolder.Parent then return ChamsFolder end
-    local holder = (gethui and gethui()) or game:GetService("CoreGui")
-    ChamsFolder = Instance.new("Folder")
-    ChamsFolder.Name = "EntreVielas_Chams"
-    ChamsFolder.Parent = holder
-    return ChamsFolder
+    -- Um executor pode negar escrita no CoreGui (identidade 2). Deixar o erro
+    -- subir derrubaria o frame inteiro, e o chams levaria junto box, tracer e
+    -- todo o resto do ESP. Falhar aqui só desliga o chams.
+    local ok, folder = pcall(function()
+        local holder = (gethui and gethui()) or game:GetService("CoreGui")
+        local f = Instance.new("Folder")
+        f.Name = "EntreVielas_Chams"
+        f.Parent = holder
+        return f
+    end)
+    if not ok then return nil end
+    ChamsFolder = folder
+    return folder
+end
+
+-- Config antigo (lib legada) pode trazer cores como tabela {R,G,B} em vez
+-- de Color3, ou nil quando a chave não existia. Color3.toHSV e a atribuição no
+-- Highlight estouram nesses casos e, como o chams roda no meio do frame, o erro
+-- derrubaria box, tracer e o resto do ESP. Normaliza para Color3 sempre.
+local function ESP_SafeColor(c, fallback)
+    if typeof(c) == "Color3" then return c end
+    if type(c) == "table" and tonumber(c.R) and tonumber(c.G) and tonumber(c.B) then
+        return Color3.new(tonumber(c.R), tonumber(c.G), tonumber(c.B))
+    end
+    return fallback or Color3.fromRGB(255, 255, 255)
+end
+
+-- Transparência fora de [0,1] (ou lixo de config antigo) é recusada pelo
+-- Roblox e derrubaria o frame pelo mesmo motivo.
+local function ESP_SafeAlpha(v, fallback)
+    local n = tonumber(v)
+    if not n then return fallback or 0 end
+    return math.clamp(n, 0, 1)
 end
 
 -- Cor do neon: a cor pedida puxada para o branco. Só é aplicada quando o
@@ -4267,11 +4323,17 @@ end
 local function ChamsGet(data)
     local h = data.Chams
     if h and h.Parent then return h end
-    h = Instance.new("Highlight")
-    h.Name = "EV_Chams"
-    h.Parent = ChamsParent()
-    data.Chams = h
-    return h
+    local parent = ChamsParent()
+    if not parent then return nil end
+    local ok, created = pcall(function()
+        local hl = Instance.new("Highlight")
+        hl.Name = "EV_Chams"
+        hl.Parent = parent
+        return hl
+    end)
+    if not ok then return nil end
+    data.Chams = created
+    return created
 end
 
 local function ChamsDestroy(data)
@@ -4840,26 +4902,38 @@ local function ESP_Render()
         -- parado no CoreGui ainda é um objeto do jogo.
         if Config.Chams.Enabled then
             local h = ChamsGet(data)
-            h.Adornee = char
-            h.Enabled = true
-            h.FillTransparency = Config.Chams.Fill and Config.Chams.FillTransparency or 1
-            h.OutlineTransparency = Config.Chams.Outline and Config.Chams.OutlineTransparency or 1
-            local fillC = (rb and Config.Chams.RGB) and rainbowColor or Config.Chams.FillColor
-            local lineC = (rb and Config.Chams.RGB) and rainbowColor or Config.Chams.OutlineColor
-            -- Team Color por último: a cor do time substitui a fixa, como nos
-            -- outros elementos (o RGB já foi aplicado acima).
-            if Config.Chams.Team and teamBase then
-                fillC = (tc.TeamRGB and ESP_TeamTint(teamBase, teamHue)) or teamBase
-                lineC = fillC
+            if h then
+                h.Adornee = char
+                h.Enabled = true
+                h.FillTransparency = Config.Chams.Fill
+                    and ESP_SafeAlpha(Config.Chams.FillTransparency, 0.5) or 1
+                h.OutlineTransparency = Config.Chams.Outline
+                    and ESP_SafeAlpha(Config.Chams.OutlineTransparency, 0) or 1
+                local fillC = (rb and Config.Chams.RGB) and rainbowColor or Config.Chams.FillColor
+                local lineC = (rb and Config.Chams.RGB) and rainbowColor or Config.Chams.OutlineColor
+                -- Team Color por último: a cor do time substitui a fixa, como nos
+                -- outros elementos (o RGB já foi aplicado acima).
+                if Config.Chams.Team and teamBase then
+                    fillC = (tc.TeamRGB and ESP_TeamTint(teamBase, teamHue)) or teamBase
+                    lineC = fillC
+                end
+                -- Config antigo pode trazer a cor como tabela {R,G,B}. Color3.toHSV
+                -- sobre tabela estoura e derrubaria o frame inteiro.
+                fillC = ESP_SafeColor(fillC)
+                lineC = ESP_SafeColor(lineC)
+                if Config.Chams.Glow then
+                    local gi = Config.Chams.GlowIntensity
+                    fillC = ChamsNeon(fillC, gi)
+                    lineC = ChamsNeon(lineC, gi)
+                end
+                SetIf(h, "FillColor", fillC)
+                SetIf(h, "OutlineColor", lineC)
+                -- Config antigo pode ter "Always" (nome que nunca existiu). Atribuir
+                -- nil em DepthMode estoura e derruba o frame inteiro, matando todo
+                -- o ESP, então cai no padrão quando o nome não resolve.
+                SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode]
+                    or Enum.HighlightDepthMode.AlwaysOnTop)
             end
-            if Config.Chams.Glow then
-                local gi = Config.Chams.GlowIntensity
-                fillC = ChamsNeon(fillC, gi)
-                lineC = ChamsNeon(lineC, gi)
-            end
-            SetIf(h, "FillColor", fillC)
-            SetIf(h, "OutlineColor", lineC)
-            SetIf(h, "DepthMode", Enum.HighlightDepthMode[Config.Chams.DepthMode])
         elseif data.Chams then
             ChamsDestroy(data)
         end
@@ -5306,8 +5380,8 @@ SecChams:AddSlider({
     Flag = "SecChams_TranspContorno", Name = "Transp. Contorno", Min = 0, Max = 1, Default = 0, Round = 2,
     Callback = function(v) Config.Chams.OutlineTransparency = v end });
 SecChams:AddDropdown({
-    Flag = "SecChams_Profundidade", Name = "Profundidade", Default = "Always",
-    Values = {"Always", "Occluded"}, Callback = function(v) Config.Chams.DepthMode = v end });
+    Flag = "SecChams_Profundidade", Name = "Profundidade", Default = "AlwaysOnTop",
+    Values = {"AlwaysOnTop", "Occluded"}, Callback = function(v) Config.Chams.DepthMode = v end });
 AddEffects(SecChams, Config.Chams, { rgb = "SecChams_RGB",
     glow = "SecChams_Brilho", glowInt = "SecChams_IntensidadeBrilho" });
 
@@ -5436,7 +5510,6 @@ local VisualSection = WorldTab:DrawSection({
 VisualSection:AddToggle({
     Flag = "VisualSection_FullBright",
     Name = "FullBright",
-    Description = "Ativa/Desativa o brilho máximo no jogo",
     Default = false,
     Callback = function(enabled)
         toggleFullBright(enabled)
