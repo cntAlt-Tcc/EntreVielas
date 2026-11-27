@@ -37,16 +37,43 @@ __ok("hud: corrotina terminou", coroutine.status(__M.__mainCo) == "dead")
 local LIB = __FIVESYNC
 __ok("hud: lib exposta", type(LIB) == "table")
 
--- 1. As tres abas moram em Visual, como o resto do menu: nao existe
--- categoria HUD separada.
+-- 1. As tres abas moram no container Gui, dentro de Vsync Menu V1: nao
+-- existe categoria HUD separada.
 __ok("hud: aba Botões presente", hasText(" Botões "))
 __ok("hud: aba Keystrokes presente", hasText(" Keystrokes "))
 __ok("hud: aba Overlays presente", hasText(" Overlays "))
+__ok("hud: container Gui presente", hasText("| Gui"))
+__ok("hud: categoria HUD removida", not hasText("HUD"))
 
 local KS = getgenv().Vsync_Keystrokes
 __ok("hud: keystrokes exposto", type(KS) == "table")
 __ok("hud: root do painel existe", KS and KS.Root ~= nil and KS.Root.Parent ~= nil)
-__ok("hud: painel comeca visivel", KS and KS.Gui ~= nil and KS.Gui.Enabled == true)
+__ok("hud: painel comeca desligado", KS and KS.Gui ~= nil and KS.Gui.Enabled == false)
+
+-- A borda nasce do estado, nao de uma cor fixa no desenho. O picker guarda a
+-- cor arredondada, entao a comparacao usa tolerancia.
+local function corPerto(a, b)
+    if not (a and b) then return false end
+    return math.abs(a.R - b.R) < 0.02 and math.abs(a.G - b.G) < 0.02 and math.abs(a.B - b.B) < 0.02
+end
+local pickerBorda = LIB.Flags["KS_CorBordaMouse"]
+local corDoPicker = pickerBorda and pickerBorda:GetValue().ColorPicker.Color
+__ok("hud: borda do mouse nasce do estado",
+     KS and KS.Mouse.BorderStroke and corPerto(KS.Mouse.BorderStroke.Color, corDoPicker),
+     "stroke=" .. tostring(KS and KS.Mouse.BorderStroke and KS.Mouse.BorderStroke.Color)
+     .. " picker=" .. tostring(corDoPicker))
+
+-- HUD desenha na cena, entao fica atras do menu (que usa o DisplayOrder padrao).
+__ok("hud: keystrokes atras do menu", KS and KS.Gui.DisplayOrder < 0, KS and KS.Gui.DisplayOrder)
+local OV_GUI = getgenv().Vsync_Overlays
+__ok("hud: overlays atras do menu",
+     OV_GUI and OV_GUI.Panel and OV_GUI.Panel.Parent.DisplayOrder < 0,
+     OV_GUI and OV_GUI.Panel and OV_GUI.Panel.Parent.DisplayOrder)
+
+-- Liga o painel: o resto da suite exercita teclas, som e arrasto, que so
+-- respondem com o HUD ativo. O default desligado ja foi verificado acima.
+LIB.Flags["KS_Ativar"]:SetValue(true)
+__M.__drain(5)
 
 -- 2. Layout FULL do exemplo: numeros, QWERT, ASDFG, ZXCV, CTRL/ALT/SPACE.
 if KS then
@@ -267,6 +294,22 @@ if KS then
              KS.Keys["W"].Frame.BackgroundColor3 == Color3.fromRGB(10, 20, 30))
     end
 
+    -- A borda do mouse era rosa fixo; agora segue o picker.
+    local corBorda = LIB.Flags["KS_CorBordaMouse"]
+    __ok("hud: color picker da borda existe", corBorda ~= nil)
+    if corBorda then
+        local antes = KS.Mouse.BorderStroke.Color
+        corBorda:SetValue(Color3.fromRGB(70, 80, 90))
+        __M.__drain(5)
+        __ok("hud: cor da borda aplicada",
+             KS.Mouse.BorderStroke.Color == Color3.fromRGB(70, 80, 90),
+             tostring(KS.Mouse.BorderStroke.Color))
+        __ok("hud: cor da borda mudou de fato",
+             KS.Mouse.BorderStroke.Color ~= antes, tostring(antes))
+        corBorda:SetValue(antes)
+        __M.__drain(5)
+    end
+
     local corMouse = LIB.Flags["KS_CorMouse"]
     __ok("hud: color picker do mouse existe", corMouse ~= nil)
     if corMouse then
@@ -444,6 +487,9 @@ if QB then
     end
     __ok("hud: todo botao aponta para Flag real", #broken == 0, table.concat(broken, ", "))
     __ok("hud: registro com 23 botoes", total == 23, total)
+    -- Botoes tambem sao HUD: desenham atras do menu.
+    __ok("hud: botoes atras do menu", QB.Root and QB.Root.DisplayOrder < 0,
+         QB.Root and QB.Root.DisplayOrder)
 end
 
 -- 12. Mobile: em tela estreita o painel encolhe para caber.

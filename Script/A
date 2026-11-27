@@ -3983,6 +3983,13 @@ local VisualContainer = Window:DrawContainerTab({
 	Icon = "eye",
 });
 
+-- Elementos de jogo (Botões, Keystrokes, Overlays) desenham por cima da cena,
+-- entao moram num container proprio em vez de se misturar com ajustes visuais.
+local GuiContainer = Window:DrawContainerTab({
+	Name = "| Gui",
+	Icon = "layout-dashboard",
+});
+
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -5849,17 +5856,11 @@ MotionBlurSection:AddSlider({
 
 
 -- ==============================================================
--- Categoria HUD: tudo que desenha na tela fora do menu.
--- Botões, Keystrokes e Overlays moram aqui -- são elementos de jogo, não
--- ajustes visuais da cena, e por isso saíram da aba Visual.
--- ==============================================================
-Window:DrawCategory({ Name = "HUD" })
--- ==============================================================
 -- Aba "Botões": HUD de botões on-screen para ligar/desligar funções.
 -- Cada botão espelha o estado de um Flag do menu; clicar alterna o Flag.
 -- Layout (visibilidade + posição) é salvo em disco e recarregado no start.
 -- ==============================================================
-local ButtonTab = VisualContainer:DrawTab({
+local ButtonTab = GuiContainer:DrawTab({
     Name = " Botões ",
     Type = "Single",
     EnableScrolling = true,
@@ -5961,7 +5962,7 @@ local ButtonTab = VisualContainer:DrawTab({
         gui.ResetOnSpawn = false
         gui.IgnoreGuiInset = true
         gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        gui.DisplayOrder = 9999
+        gui.DisplayOrder = -3
         gui.Parent = QuickCoreGui
         QuickButtons.Root = gui
         return gui
@@ -6245,7 +6246,7 @@ end)()
 -- Estado vem de InputBegan/InputEnded, que e o que permite tocar o som
 -- no instante do aperto; o poll e so rede de seguranca.
 -- ==============================================================
-local KeystrokesTab = VisualContainer:DrawTab({
+local KeystrokesTab = GuiContainer:DrawTab({
     Name = " Keystrokes ",
     Type = "Single",
     EnableScrolling = true,
@@ -6268,7 +6269,7 @@ local KeystrokesTab = VisualContainer:DrawTab({
     local KS_MOUSE_SOUND = "9120232166"
 
     local KSState = {
-        Enabled = true,
+        Enabled = false,
         ShowMouse = true,
         Layout = "FULL",
         Anchor = "BottomLeft",
@@ -6279,6 +6280,7 @@ local KeystrokesTab = VisualContainer:DrawTab({
         KeyPressedColor = Color3.fromRGB(35, 85, 155),
         MouseColor = Color3.fromRGB(245, 45, 165),
         MousePressedColor = Color3.fromRGB(255, 125, 210),
+        MouseBorderColor = Color3.fromRGB(240, 240, 248),
         AccentColor = Color3.fromRGB(65, 155, 255),
         TextColor = Color3.fromRGB(245, 245, 250),
     }
@@ -6300,7 +6302,6 @@ local KeystrokesTab = VisualContainer:DrawTab({
     local function SaveKS()
         local function rgb(c) return { c.R, c.G, c.B } end
         local out = { State = {
-            Enabled = KSState.Enabled,
             ShowMouse = KSState.ShowMouse,
             Layout = KSState.Layout,
             Anchor = KSState.Anchor,
@@ -6311,6 +6312,7 @@ local KeystrokesTab = VisualContainer:DrawTab({
             KeyPressedColor = rgb(KSState.KeyPressedColor),
             MouseColor = rgb(KSState.MouseColor),
             MousePressedColor = rgb(KSState.MousePressedColor),
+            MouseBorderColor = rgb(KSState.MouseBorderColor),
             AccentColor = rgb(KSState.AccentColor),
             TextColor = rgb(KSState.TextColor),
             Pos = Keystrokes.Root and {
@@ -6332,7 +6334,6 @@ local KeystrokesTab = VisualContainer:DrawTab({
         if not (ok and type(data) == "table" and type(data.State) == "table") then return end
 
         local st = data.State
-        if st.Enabled ~= nil then KSState.Enabled = st.Enabled end
         if st.ShowMouse ~= nil then KSState.ShowMouse = st.ShowMouse end
         if st.Layout then KSState.Layout = st.Layout end
         if st.Anchor then KSState.Anchor = st.Anchor end
@@ -6348,6 +6349,7 @@ local KeystrokesTab = VisualContainer:DrawTab({
         KSState.KeyPressedColor = color(st.KeyPressedColor, KSState.KeyPressedColor)
         KSState.MouseColor = color(st.MouseColor, KSState.MouseColor)
         KSState.MousePressedColor = color(st.MousePressedColor, KSState.MousePressedColor)
+        KSState.MouseBorderColor = color(st.MouseBorderColor, KSState.MouseBorderColor)
         KSState.AccentColor = color(st.AccentColor, KSState.AccentColor)
         KSState.TextColor = color(st.TextColor, KSState.TextColor)
         return st.Pos
@@ -6522,7 +6524,11 @@ local KeystrokesTab = VisualContainer:DrawTab({
             BorderSizePixel = 0,
         }, area)
         Make("UICorner", { CornerRadius = UDim.new(0, 22) }, body)
-        Make("UIStroke", { Color = Color3.fromRGB(255, 100, 210), Thickness = 1, Transparency = 0.1 }, body)
+        Keystrokes.Mouse.BorderStroke = Make("UIStroke", {
+            Color = KSState.MouseBorderColor,
+            Thickness = 1,
+            Transparency = 0.1,
+        }, body)
         Keystrokes.Mouse.Body = body
 
         local left = Make("Frame", {
@@ -6546,11 +6552,12 @@ local KeystrokesTab = VisualContainer:DrawTab({
         Make("UICorner", { CornerRadius = UDim.new(0, 20) }, right)
         Keystrokes.Mouse.Right = right
 
-        Make("Frame", {
+        Keystrokes.Mouse.Divider = Make("Frame", {
             Name = "Divider",
             Position = UDim2.fromOffset(24, 0),
             Size = UDim2.new(0, 1, 0, 34),
-            BackgroundColor3 = Color3.fromRGB(100, 20, 75),
+            BackgroundColor3 = KSState.MouseBorderColor,
+            BackgroundTransparency = 0.6,
             BorderSizePixel = 0,
         }, body)
 
@@ -6751,7 +6758,7 @@ local KeystrokesTab = VisualContainer:DrawTab({
     gui.Name = "Vsync_Keystrokes"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 999998
+    gui.DisplayOrder = -1
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Enabled = KSState.Enabled
     gui.Parent = KSCoreGui
@@ -6958,6 +6965,16 @@ local KeystrokesTab = VisualContainer:DrawTab({
         end
     })
     KSColors:AddColorPicker({
+        Flag = "KS_CorBordaMouse", Name = "Cor da Borda do Mouse", Default = KSState.MouseBorderColor,
+        Callback = function(c)
+            KSState.MouseBorderColor = c
+            local M = Keystrokes.Mouse
+            if M.BorderStroke then M.BorderStroke.Color = c end
+            if M.Divider then M.Divider.BackgroundColor3 = c end
+            SaveKS()
+        end
+    })
+    KSColors:AddColorPicker({
         Flag = "KS_CorMousePressionado", Name = "Cor do Mouse Pressionado", Default = KSState.MousePressedColor,
         Callback = function(c) KSState.MousePressedColor = c; SaveKS() end
     })
@@ -6972,7 +6989,7 @@ end)()
 -- O FPS sai da contagem de frames por segundo do RenderStepped; o ping
 -- usa Stats.Network.ServerStatsItem, que ja existe no cliente.
 -- ==============================================================
-local OverlaysTab = VisualContainer:DrawTab({
+local OverlaysTab = GuiContainer:DrawTab({
     Name = " Overlays ",
     Type = "Single",
     EnableScrolling = true,
@@ -7102,7 +7119,7 @@ local OverlaysTab = VisualContainer:DrawTab({
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-    gui.DisplayOrder = 999997
+    gui.DisplayOrder = -2
     gui.Parent = OVCoreGui
 
     local panel = Instance.new("Frame")
