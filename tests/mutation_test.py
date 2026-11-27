@@ -168,6 +168,25 @@ MUTS = [
     ("lock de posicao nao trava o arrasto",
      '            -- Posicao travada: o botao continua clicavel, so nao sai do lugar.\n            if QuickState.LockPos then return end',
      '            if false then return end'),
+    # --- HUD: camadas e defaults ---
+    ("keystrokes volta a nascer ligada",
+     '    local KSState = {\n        Enabled = false,',
+     '    local KSState = {\n        Enabled = true,'),
+    ("keystrokes volta na frente do menu",
+     '    gui.DisplayOrder = -1',
+     '    gui.DisplayOrder = 999998'),
+    ("overlays voltam na frente do menu",
+     '    gui.DisplayOrder = -2',
+     '    gui.DisplayOrder = 999997'),
+    ("botoes voltam na frente do menu",
+     '        gui.DisplayOrder = -3',
+     '        gui.DisplayOrder = 9999'),
+    ("borda do mouse volta a ser fixa",
+     '            Color = KSState.MouseBorderColor,\n            Thickness = 1,\n            Transparency = 0.1,',
+     '            Color = Color3.fromRGB(255, 100, 210),\n            Thickness = 1,\n            Transparency = 0.1,'),
+    ("borda do mouse ignora o picker",
+     '            if M.BorderStroke then M.BorderStroke.Color = c end',
+     '            if false then end'),
 ]
 
 def run():
