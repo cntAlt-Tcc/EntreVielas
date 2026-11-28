@@ -187,12 +187,37 @@ MUTS = [
     ("borda do mouse ignora o picker",
      '            if M.BorderStroke then M.BorderStroke.Color = c end',
      '            if false then end'),
+    ("no recoil nao zera o recuo",
+     '   if getgenv().Weapon_NoRecoil and WMatch(name, W_PAT.Recoil) then return 0 end',
+     '   if getgenv().Weapon_NoRecoil and WMatch(name, W_PAT.Recoil) then return 1 end'),
+    ("bala espalha nao zera o spread",
+     '   if getgenv().Weapon_NoSpread and WMatch(name, W_PAT.Spread) then return 0 end',
+     '   if getgenv().Weapon_NoSpread and WMatch(name, W_PAT.Spread) then return 1 end'),
+    ("municao infinita nao escreve o valor",
+     '   if getgenv().Weapon_InfiniteAmmo and WMatch(name, W_PAT.Ammo) then return W_AMMO_VALUE end',
+     '   if getgenv().Weapon_InfiniteAmmo and WMatch(name, W_PAT.Ammo) then return nil end'),
+    ("clip infinito mexe na municao",
+     '   if getgenv().Weapon_InfiniteClip and WMatch(name, W_PAT.Clip) then return W_AMMO_VALUE end',
+     '   if getgenv().Weapon_InfiniteClip and WMatch(name, W_PAT.Ammo) then return W_AMMO_VALUE end'),
+    ("fastfire nao zera a cadencia",
+     '   if getgenv().Weapon_FastFire and WMatch(name, W_PAT.Rate) then\n      return getgenv().Weapon_FireDelay\n   end',
+     '   if getgenv().Weapon_FastFire and WMatch(name, W_PAT.Rate) then return nil end'),
+    ("desligar nao restaura o original",
+     '      WRunning = false\n      WRestoreAll()',
+     '      WRunning = false'),
+    ("fastfire nao aciona a arma",
+     '         if gun then pcall(function() gun:Activate() end) end',
+     '         if gun then end'),
+    ("atributos das armas sao ignorados",
+     '      local ok, attrs = pcall(function() return tool:GetAttributes() end)',
+     '      local ok, attrs = pcall(function() return nil end)'),
 ]
 
 def run():
     outs = []
     tests_dir = ROOT / 'tests'
-    for driver in ['esp_test.lua', 'dropdown_test.lua', 'api_compat_test.lua', 'hud_test.lua']:
+    for driver in ['esp_test.lua', 'dropdown_test.lua', 'api_compat_test.lua',
+                   'hud_test.lua', 'weapons_test.lua']:
         if not (tests_dir / driver).exists():
             continue
         subprocess.run(['python3', str(tests_dir / 'harness.py'),

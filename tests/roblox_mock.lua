@@ -306,6 +306,12 @@ function methods:GetMouse() return M.mouse end
 function methods:GetTextSize(txt) return Vector2.new(#tostring(txt or "") * 7, 14) end
 function methods:GetTextSize_() end
 -- Remote/Eventos: a lib usa Fire/FireServer/FireClient em notificacoes.
+-- Tool:Activate dispara o tiro. Contamos as chamadas para o teste de
+-- "atirar rapido" provar que a arma realmente e acionada em repeticao.
+M.__activations = {}
+function methods:Activate()
+    M.__activations[#M.__activations + 1] = self
+end
 function methods:Fire() end
 function methods:FireServer() end
 function methods:FireClient() end
@@ -336,8 +342,9 @@ function methods:GetChildren() return rawget(self, "_children") end
 function methods:GetDescendants() return rawget(self, "_children") end
 function methods:Destroy() rawget(self, "_props").Parent = nil end
 function methods:ClearAllChildren() rawset(self, "_children", {}) end
-function methods:GetAttribute() return nil end
-function methods:SetAttribute() end
+function methods:GetAttribute(k) return rawget(self, "_attrs")[k] end
+function methods:SetAttribute(k, v) rawget(self, "_attrs")[k] = v end
+function methods:GetAttributes() return rawget(self, "_attrs") end
 -- Registrar de verdade: um Connect que descarta o handler faz o teste passar
 -- sem exercitar nada (foi assim que o arrasto do HUD passou sem funcionar).
 -- O nome do sinal inclui a propriedade para o teste disparar so o que quer.
@@ -360,6 +367,7 @@ function Instance.new(cls, parent)
         ClassName = cls,
         _props = { ZIndex = 1, Transparency = 0, Visible = true },
         _children = {},
+        _attrs = {},
     }, instMeta)
     o._props.Name = cls
     if parent ~= nil then o.Parent = parent end
@@ -609,6 +617,9 @@ function M.addPlayer(name, teamColor, health)
     plr.TeamColor = { Color = teamColor or Color3.fromRGB(0, 255, 0) }
     plr.Team = { TeamColor = { Color = teamColor or Color3.fromRGB(0, 255, 0) } }
     plr.Backpack = Instance.new("Backpack")
+    -- No Roblox o Backpack e filho do Player; sem isso FindFirstChildOfClass
+    -- devolve nil e o codigo que procura armas nao acha nada.
+    plr.Backpack.Parent = plr
 
     local char = Instance.new("Model")
     char.Name = name
@@ -694,6 +705,7 @@ __lp.DisplayName = "LocalPlayer"
 __lp.TeamColor = { Color = Color3.fromRGB(255, 255, 255) }
 __lp.Team = { TeamColor = { Color = Color3.fromRGB(255, 255, 255) } }
 __lp.Backpack = Instance.new("Backpack")
+__lp.Backpack.Parent = __lp
 __lp.Parent = Players
 Players.LocalPlayer = __lp
 M.localPlayer = __lp

@@ -3771,6 +3771,285 @@ hitboxDecreaseButton.Visible = false
 
 end
 do -- escopo local (limite de 200 registradores)
+local WeaponTab = CombatContainer:DrawTab({
+   Name = " Weapons Mod ",
+   Type = "Double"
+});
+
+-- [[ Weapons mod: altera valores nomeados dentro de cada Tool (Value e
+-- Attribute). Nao hooka a funcao de tiro de nenhum jogo: recuo ou spread
+-- calculado so no codigo do jogo nao tem valor pra alterar daqui. ]]
+
+getgenv().Weapon_NoRecoil     = false
+getgenv().Weapon_NoSpread     = false
+getgenv().Weapon_InfiniteAmmo = false
+getgenv().Weapon_InfiniteClip = false
+getgenv().Weapon_FastFire     = false
+getgenv().Weapon_FireDelay    = 0
+
+local WUIS = game:GetService("UserInputService")
+local WLocal = game:GetService("Players").LocalPlayer
+
+local W_AMMO_VALUE = 9999
+local W_NUMERIC = { IntValue = true, NumberValue = true }
+
+-- "ammo" e "clip" ficam separados de proposito: sao mods distintos e em
+-- algumas armas sao valores distintos.
+local W_PAT = {
+   Ammo   = { "ammo", "reserve" },
+   Clip   = { "clip", "mag" },
+   Reload = { "reload" },
+   Recoil = { "recoil", "kick", "shake" },
+   Spread = { "spread", "inaccuracy", "bloom" },
+   Rate   = { "firerate", "cooldown", "firedelay", "rate" },
+}
+
+local WSaved = {}
+local WRunning, WToken, WFiring = false, 0, false
+
+local function WMatch(name, patterns)
+   local low = string.lower(name)
+   for _, p in ipairs(patterns) do
+      if string.find(low, p, 1, true) then return true end
+   end
+   return false
+end
+
+local function WAnyEnabled()
+   return getgenv().Weapon_NoRecoil or getgenv().Weapon_NoSpread
+      or getgenv().Weapon_InfiniteAmmo or getgenv().Weapon_InfiniteClip
+      or getgenv().Weapon_FastFire
+end
+
+-- Valor desejado para um nome; nil quando nenhum mod ligado o cobre.
+local function WDesired(name)
+   if getgenv().Weapon_NoRecoil and WMatch(name, W_PAT.Recoil) then return 0 end
+   if getgenv().Weapon_NoSpread and WMatch(name, W_PAT.Spread) then return 0 end
+   if getgenv().Weapon_InfiniteAmmo and WMatch(name, W_PAT.Ammo) then return W_AMMO_VALUE end
+   if getgenv().Weapon_InfiniteClip and WMatch(name, W_PAT.Clip) then return W_AMMO_VALUE end
+   if (getgenv().Weapon_InfiniteAmmo or getgenv().Weapon_InfiniteClip)
+      and WMatch(name, W_PAT.Reload) then return 0 end
+   if getgenv().Weapon_FastFire and WMatch(name, W_PAT.Rate) then
+      return getgenv().Weapon_FireDelay
+   end
+   return nil
+end
+
+-- Guarda o original uma vez (so na primeira escrita daquela chave) e escreve
+-- o novo so quando muda, para nao disparar Changed a cada tick sem motivo.
+local function WSet(obj, key, attrName, value)
+   local store = WSaved[obj]
+   if not store then store = {}; WSaved[obj] = store end
+   local id = attrName and ("#" .. attrName) or key
+   if store[id] == nil then
+      if attrName then
+         local ok, cur = pcall(function() return obj:GetAttribute(attrName) end)
+         store[id] = ok and cur or false
+      else
+         store[id] = obj[key]
+      end
+   end
+   if attrName then
+      if obj:GetAttribute(attrName) ~= value then obj:SetAttribute(attrName, value) end
+   elseif obj[key] ~= value then
+      obj[key] = value
+   end
+end
+
+local function WRestoreAll()
+   for obj, store in pairs(WSaved) do
+      for id, val in pairs(store) do
+         pcall(function()
+            if string.sub(id, 1, 1) == "#" then
+               obj:SetAttribute(string.sub(id, 2), val)
+            else
+               obj[id] = val
+            end
+         end)
+      end
+   end
+   WSaved = {}
+end
+
+local function WTools()
+   local out = {}
+   local function scan(container)
+      if not container then return end
+      for _, c in ipairs(container:GetChildren()) do
+         if c.ClassName == "Tool" then table.insert(out, c) end
+      end
+   end
+   if WLocal.Character then scan(WLocal.Character) end
+   scan(WLocal:FindFirstChildOfClass("Backpack"))
+   return out
+end
+
+local function WGun()
+   for _, t in ipairs(WTools()) do
+      for _, d in ipairs(t:GetDescendants()) do
+         if W_NUMERIC[d.ClassName] and WMatch(d.Name, W_PAT.Ammo) and d.Value > 0 then
+            return t
+         end
+      end
+   end
+   return nil
+end
+
+local function WTick()
+   for _, tool in ipairs(WTools()) do
+      for _, obj in ipairs(tool:GetDescendants()) do
+         local isNum = W_NUMERIC[obj.ClassName] == true
+         local isBool = obj.ClassName == "BoolValue"
+         if isNum or isBool then
+            local want = WDesired(obj.Name)
+            if want ~= nil then
+               -- `isBool and (want ~= 0) or want` devolveria 0, nao false,
+               -- porque false or 0 e 0 em Lua.
+               local payload = want
+               if isBool then payload = (want ~= 0) end
+               WSet(obj, "Value", nil, payload)
+            end
+         end
+      end
+      local ok, attrs = pcall(function() return tool:GetAttributes() end)
+      if ok and type(attrs) == "table" then
+         for name, cur in pairs(attrs) do
+            local want = WDesired(name)
+            if want ~= nil then
+               if type(cur) == "boolean" then want = want ~= 0 end
+               WSet(tool, nil, name, want)
+            end
+         end
+      end
+   end
+end
+
+-- Um unico loop enquanto houver mod ligado, em vez de uma thread por arma:
+-- arma equipada/guardada muda de pai e as threads antigas ficariam orfas.
+local function WUpdateLoop()
+   if WAnyEnabled() then
+      if not WRunning then
+         WRunning = true
+         WToken = WToken + 1
+         local token = WToken
+         task.spawn(function()
+            while WRunning and WToken == token do
+               WTick()
+               task.wait(0.1)
+            end
+         end)
+      end
+   elseif WRunning then
+      WRunning = false
+      WRestoreAll()
+   end
+end
+
+-- Atirar rapido: repete Activate enquanto o botao esquerdo estiver pressionado.
+WUIS.InputBegan:Connect(function(input)
+   if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+   if not getgenv().Weapon_FastFire or WFiring then return end
+   WFiring = true
+   task.spawn(function()
+      while WFiring and getgenv().Weapon_FastFire do
+         local gun = WGun()
+         if gun then pcall(function() gun:Activate() end) end
+         task.wait(getgenv().Weapon_FireDelay)
+      end
+   end)
+end)
+
+WUIS.InputEnded:Connect(function(input)
+   if input.UserInputType == Enum.UserInputType.MouseButton1 then WFiring = false end
+end)
+
+local function WNotify(txt)
+   Notifier.new({
+      Title = "[!] - Weapons",
+      Content = txt,
+      Duration = 1.5,
+      Icon = "rbxassetid://117056629401480"
+   })
+end
+
+local WMods = WeaponTab:DrawSection({ Name = "Mods", Position = "left" })
+
+WMods:AddToggle({
+   Flag = "W_NoRecoil", Name = "No Recoil", Default = false,
+   Callback = function(v)
+      getgenv().Weapon_NoRecoil = v; WUpdateLoop()
+      WNotify("No Recoil: " .. (v and "ON" or "OFF"))
+   end
+})
+
+WMods:AddToggle({
+   Flag = "W_NoSpread", Name = "Bala não espalha", Default = false,
+   Callback = function(v)
+      getgenv().Weapon_NoSpread = v; WUpdateLoop()
+      WNotify("Bala não espalha: " .. (v and "ON" or "OFF"))
+   end
+})
+
+WMods:AddToggle({
+   Flag = "W_InfiniteAmmo", Name = "Munição infinita", Default = false,
+   Callback = function(v)
+      getgenv().Weapon_InfiniteAmmo = v; WUpdateLoop()
+      WNotify("Munição infinita: " .. (v and "ON" or "OFF"))
+   end
+})
+
+WMods:AddToggle({
+   Flag = "W_InfiniteClip", Name = "Clip infinito", Default = false,
+   Callback = function(v)
+      getgenv().Weapon_InfiniteClip = v; WUpdateLoop()
+      WNotify("Clip infinito: " .. (v and "ON" or "OFF"))
+   end
+})
+
+WMods:AddToggle({
+   Flag = "W_FastFire", Name = "Atirar rápido", Default = false,
+   Callback = function(v)
+      getgenv().Weapon_FastFire = v
+      if not v then WFiring = false end
+      WUpdateLoop()
+      WNotify("Atirar rápido: " .. (v and "ON" or "OFF"))
+   end
+})
+
+local WInfo = WeaponTab:DrawSection({ Name = "Ajustes", Position = "right" })
+
+WInfo:AddSlider({
+   Flag = "W_FireDelay", Name = "Intervalo do tiro rápido",
+   Min = 0, Max = 0.5, Round = 3, Default = 0,
+   Callback = function(v) getgenv().Weapon_FireDelay = v; WUpdateLoop() end
+})
+
+WInfo:AddButton({
+   Name = "Reescanear armas",
+   Callback = function()
+      if not WAnyEnabled() then
+         WNotify("Ative um mod primeiro.")
+         return
+      end
+      WTick()
+      WNotify("Armas reescaneadas: " .. tostring(#WTools()))
+   end
+})
+
+WInfo:AddParagraph({
+   Title = "Como funciona",
+   Content = "Procura valores e attributes com nome de ammo, clip, mag, recoil, "
+      .. "spread, reload, firerate ou cooldown dentro de cada arma (na mochila "
+      .. "e equipada) e ajusta enquanto o mod estiver ligado.\n"
+      .. "Ao desligar, os valores originais voltam.\n\n"
+      .. "Se o jogo calcula recuo ou espalhamento apenas no codigo dele, sem "
+      .. "expor esse numero na arma, nao ha o que alterar por aqui."
+})
+
+WUpdateLoop()
+end
+
+do -- escopo local (limite de 200 registradores)
 local MagTab = CombatContainer:DrawTab({
    Name = " Magnetic Aim  ",
    Type = "Double"
